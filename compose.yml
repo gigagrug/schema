@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    ports:
+      - 5432:5432
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  mysql:
+    image: mysql:latest
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=mydatabase
+      - MYSQL_USER=myuser
+      - MYSQL_PASSWORD=mypassword
+    ports:
+      - 3306:3306
+    volumes:
+      - mysql-data:/var/lib/mysql
+  mariadb:
+    image: mariadb:latest
+    environment:
+      - MARIADB_ROOT_PASSWORD=root
+      - MARIADB_DATABASE=mydatabase
+      - MARIADB_USER=myuser
+      - MARIADB_PASSWORD=mypassword
+    ports:
+      - 3307:3306
+    volumes:
+      - mariadb-data:/var/lib/mysql
+volumes:
+  postgres-data:
+  mysql-data:
+  mariadb-data:
+# Database URLs (for application configuration):
+#  - PostgreSQL: postgresql://postgres:postgres@localhost:5432/postgres
+#  - MySQL:     myuser:mypassword@tcp(127.0.0.1:3306)/mydatabase
+#  - MariaDB:   myuser:mypassword@tcp(127.0.0.1:3307)/mydatabase
