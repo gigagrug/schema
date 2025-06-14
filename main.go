@@ -16,7 +16,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 var version = "dev"
@@ -466,7 +466,7 @@ func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
 	var driverName string
 	switch dbType {
 	case "sqlite":
-		driverName = "sqlite3"
+		driverName = "sqlite"
 	case "postgres":
 		driverName = "pgx"
 	case "mysql", "mariadb":
@@ -495,7 +495,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	}
 	switch dbtype {
 	case "sqlite":
-		rows, err := conn.Query("SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+		rows, err := conn.Query("SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
 		if err != nil {
 			return fmt.Errorf("error querying sqlite: %w", err)
 		}
@@ -662,10 +662,8 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 			if tableName == "_schema_migrations" {
 				continue
 			}
-
 			columns := tableColumnsMap[tableName]
 			constraints := []string{}
-
 			if fks, ok := foreignKeys[tableName]; ok {
 				for _, fk := range fks {
 					fkDef := fmt.Sprintf("  CONSTRAINT fk_%s FOREIGN KEY (%s) REFERENCES %s (%s)",
@@ -707,6 +705,9 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 		re := regexp.MustCompile(`\s*ENGINE=InnoDB.*(?:DEFAULT)?\s*CHARSET=[^\s]+(?: COLLATE=[^\s]+)?;?`)
 
 		for _, tableName := range tableNames {
+			if tableName == "_schema_migrations" {
+				continue
+			}
 			var createTableSQL, dummyTableName string
 			row := conn.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", tableName))
 			if err := row.Scan(&dummyTableName, &createTableSQL); err != nil {
