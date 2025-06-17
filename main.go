@@ -24,12 +24,13 @@ var version = "dev"
 func main() {
 	var migrate MigrateFlag
 	flag.Var(&migrate, "migrate", "migrate database")
-	versionFlag := flag.Bool("v", false, "version")
+	v := flag.Bool("v", false, "version")
 	init := flag.Bool("i", false, "init schema files")
 	db := flag.String("db", "sqlite", "add db: sqlite, postgres, mysql, mariadb")
-	dbURL := flag.String("dburl", "dev.db", "add dburl")
+	url := flag.String("url", "dev.db", "add dburl")
 	create := flag.String("create", "", "create sql file name")
 	pull := flag.Bool("pull", false, "get database schema")
+	dir := flag.String("dir", "migrations", "choose path under schema/")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
@@ -38,17 +39,19 @@ func main() {
 		flag.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "\nExamples:")
 		fmt.Fprintln(os.Stderr, "  schema -i")
-		fmt.Fprintln(os.Stderr, "  schema -i -db postgres -dburl postgresql://postgres:postgres@localhost:5432/postgres")
-		fmt.Fprintln(os.Stderr, "  schema -create createuser")
+		fmt.Fprintln(os.Stderr, `  schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"`)
+		fmt.Fprintln(os.Stderr, `  schema -create="createuser"`)
 		fmt.Fprintln(os.Stderr, "  schema -migrate")
 		fmt.Fprintln(os.Stderr, `  schema -migrate="1_createuser"`)
+		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -create="insertusers"`)
+		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -migrate="0_insertusers"`)
 	}
 	flag.Parse()
 
-	if *versionFlag {
+	if *v {
 		fmt.Println("Current Version:", version)
 
-		url := fmt.Sprint("https://api.github.com/repos/gigagrug/schema/releases/latest")
+		url := "https://api.github.com/repos/gigagrug/schema/releases/latest"
 		resp, err := http.Get(url)
 		if err != nil {
 			log.Fatalf("Error fetching release data from GitHub: %v\n", err)
@@ -95,7 +98,7 @@ func main() {
 
 	if *init {
 		if _, err := os.Stat("./schema/"); os.IsNotExist(err) {
-			err := os.MkdirAll("./schema/migrations/", 0755)
+			err := os.MkdirAll("./schema/migrations/", 0700)
 			if err != nil {
 				log.Fatalf("Error creating schema/migrations directory: %v\n", err)
 			}
@@ -105,7 +108,7 @@ func main() {
 			}
 			defer schemaFile.Close()
 
-			fileContent := fmt.Sprintf("db = \"%s\"\ndbURL = env(\"DB_URL\")", *db)
+			fileContent := fmt.Sprintf("db = \"%s\"\nurl = env(\"DB_URL\")", *db)
 			_, err = schemaFile.WriteString(fileContent)
 			if err != nil {
 				log.Fatalf("Error writing to file: %v\n", err)
@@ -141,7 +144,7 @@ func main() {
 			}
 			defer envFile.Close()
 
-			schemaContent := fmt.Sprintf(`DB_URL="%s"`, *dbURL)
+			schemaContent := fmt.Sprintf(`DB_URL="%s"`, *url)
 			_, err = envFile.WriteString(schemaContent)
 			if err != nil {
 				log.Fatalf("Error writing to .env file: %v\n", err)
@@ -153,7 +156,7 @@ func main() {
 			}
 			defer envFile.Close()
 
-			schemaContent := fmt.Sprintf("\nDB_URL=\"%s\"", *dbURL)
+			schemaContent := fmt.Sprintf("\nDB_URL=\"%s\"", *url)
 			_, err = envFile.WriteString(schemaContent)
 			if err != nil {
 				log.Fatalf("Error appending to .env file: %v\n", err)
@@ -172,7 +175,13 @@ func main() {
 		defer conn.Close()
 		CheckTableExists(conn, dbtype)
 
-		dirPath := "./schema/migrations/"
+		dirPath := fmt.Sprintf("./schema/%s/", *dir)
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			err := os.MkdirAll(dirPath, 0700)
+			if err != nil {
+				log.Fatalf("Error creating %s: %v\n", dirPath, err)
+			}
+		}
 		entries, err := os.ReadDir(dirPath)
 		if err != nil {
 			log.Fatalf("Failed to read directory '%s': %v", dirPath, err)
@@ -185,28 +194,32 @@ func main() {
 			}
 		}
 		fileName := fmt.Sprintf("%d_%s.sql", fileCount, *create)
-		schemaFile, err := os.Create("./schema/migrations/" + fileName)
+		schemaFile, err := os.Create(dirPath + fileName)
 		if err != nil {
 			log.Fatalf("Error creating file: %v\n", err)
 		}
 		defer schemaFile.Close()
 
-		var sqlInsert string
-		switch dbtype {
-		case "sqlite", "postgres":
-			sqlInsert = "INSERT INTO _schema_migrations (file) VALUES ($1)"
-		case "mysql", "mariadb":
-			sqlInsert = "INSERT INTO _schema_migrations (file) VALUES (?)"
-		default:
-			log.Fatalf("Unsupported database type: %s", dbtype)
+		if *dir == "migrations" {
+			var sqlInsert string
+			switch dbtype {
+			case "sqlite", "postgres":
+				sqlInsert = "INSERT INTO _schema_migrations (file) VALUES ($1)"
+			case "mysql", "mariadb":
+				sqlInsert = "INSERT INTO _schema_migrations (file) VALUES (?)"
+			default:
+				log.Fatalf("Unsupported database type: %s", dbtype)
+			}
+			_, err = conn.Exec(sqlInsert, fileName)
+			if err != nil {
+				log.Fatalf("Error executing SQL: %v\n", err)
+			}
+			fmt.Printf("Schema successfully created sql file %s\n", fileName)
+			return
+		} else {
+			fmt.Printf("Schema successfully created sql file %s\n", fileName)
+			return
 		}
-		_, err = conn.Exec(sqlInsert, fileName)
-		if err != nil {
-			log.Fatalf("Error executing SQL: %v\n", err)
-		}
-
-		fmt.Printf("Schema successfully created sql file %s\n", fileName)
-		return
 	}
 
 	if migrate.isSet {
@@ -218,7 +231,7 @@ func main() {
 			defer conn.Close()
 			CheckTableExists(conn, dbtype)
 
-			fileP := fmt.Sprintf("./schema/migrations/%s.sql", migrate.String())
+			fileP := fmt.Sprintf("./schema/%s/%s.sql", *dir, migrate.String())
 			sqlFile, err := os.ReadFile(fileP)
 			if err != nil {
 				log.Fatalf("Error reading SQL file: %v\n", err)
@@ -229,26 +242,35 @@ func main() {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
 
-			var sqlUpdate string
-			switch dbtype {
-			case "sqlite", "postgres":
-				sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = $1"
-			case "mysql", "mariadb":
-				sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = ?"
-			default:
-				log.Fatalf("Unsupported database type: %s", dbtype)
-			}
-			_, err = conn.Exec(sqlUpdate, migrate.String())
-			if err != nil {
-				log.Fatalf("Error executing SQL: %v\n", err)
-			}
+			if *dir == "migrations" {
+				var sqlUpdate string
+				switch dbtype {
+				case "sqlite", "postgres":
+					sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = $1"
+				case "mysql", "mariadb":
+					sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = ?"
+				default:
+					log.Fatalf("Unsupported database type: %s", dbtype)
+				}
+				_, err = conn.Exec(sqlUpdate, migrate.String())
+				if err != nil {
+					log.Fatalf("Error executing SQL: %v\n", err)
+				}
 
-			err = PullDBSchema(conn, dbtype, "./schema/db.schema")
-			if err != nil {
-				log.Fatalf("Error pulling DB schema after migration: %v\n", err)
+				err = PullDBSchema(conn, dbtype, "./schema/db.schema")
+				if err != nil {
+					log.Fatalf("Error pulling DB schema after migration: %v\n", err)
+				}
+				fmt.Printf("Schema successfully migrated %s.sql\n", migrate.String())
+				return
+			} else {
+				err = PullDBSchema(conn, dbtype, "./schema/db.schema")
+				if err != nil {
+					log.Fatalf("Error pulling DB schema after migration: %v\n", err)
+				}
+				fmt.Printf("Schema successfully migrated %s.sql\n", migrate.String())
+				return
 			}
-			fmt.Printf("Schema successfully migrated %s.sql\n", migrate.String())
-			return
 		} else {
 			conn, dbtype, err := Conn2DB("./schema/db.schema")
 			if err != nil {
@@ -317,7 +339,14 @@ func main() {
 		}
 	}
 
-	fmt.Println("schema -h for help")
+	fmt.Printf(`
+ ____       _                          
+/ ___|  ___| |__   ___ _ __ ___   __ _ 
+\___ \ / __| '_ \ / _ \  _   _ \ / _  |
+ ___) | (__| | | |  __/ | | | | | (_| |
+|____/ \___|_| |_|\___|_| |_| |_|\__,_|
+%s
+`, version)
 }
 
 type MigrateFlag struct {
@@ -413,7 +442,7 @@ func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
 	foundDbType := false
 	lineNumber := 0
 	dbTypePrefix := "db ="
-	dbURLPrefix := "dbURL ="
+	dbURLPrefix := "url ="
 	envRegex := regexp.MustCompile(`env\("([^"]+)"\)`)
 
 	scanner := bufio.NewScanner(file)
@@ -742,7 +771,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "db") || strings.HasPrefix(line, "dbURL") || !foundSchemaStart {
+		if strings.HasPrefix(line, "db") || strings.HasPrefix(line, "url") || !foundSchemaStart {
 			if !strings.Contains(line, "CREATE TABLE") && !strings.Contains(line, "table ") && !strings.Contains(line, "PRIMARY KEY") {
 				configLines = append(configLines, line)
 			} else {

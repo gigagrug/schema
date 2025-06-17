@@ -1,6 +1,6 @@
 module schema
 
-go 1.24.2
+go 1.24.4
 
 require (
 	github.com/go-sql-driver/mysql v1.9.3
@@ -24,7 +24,7 @@ require (
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
-	modernc.org/libc v1.65.10 // indirect
+	modernc.org/libc v1.66.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
