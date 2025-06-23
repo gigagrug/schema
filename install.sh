@@ -31,7 +31,10 @@ else
 	URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 fi
 echo "🔽 Downloading $FILENAME from $URL"
-curl -sSL "$URL" -o "$TMP_DIR/schema${EXT}"
+curl --fail -sSL "$URL" -o "$TMP_DIR/schema${EXT}" || {
+  echo "❌ Failed to download schema binary. Version '$VERSION' may not exist."
+  exit 1
+}
 chmod +x "$TMP_DIR/schema${EXT}"
 
 if [ "$GOOS" = "windows" ]; then
