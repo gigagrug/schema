@@ -115,6 +115,7 @@ schema -sql="0_insertdata.sql" -dir="inserts"
 ```shell
 schema -sql="SELECT * FROM users"
 ```
+![table](https://github.com/user-attachments/assets/480da223-a17b-49ab-9ad0-246c606488f8)
 
 ## Flags
 v: prints your version and latest version <br>
