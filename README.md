@@ -1,5 +1,5 @@
 # Schema
-A language agnostic CLI tool for handling database migrations | SQLite, PostgreSQL, MySQL, MariaDB
+A language agnostic CLI tool for handling database | SQLite, PostgreSQL, MySQL, MariaDB
 
 ## Installation
 Install/upgrade latest version
