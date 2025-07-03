@@ -35,7 +35,7 @@ curl --fail -sSL "$URL" -o "$TMP_DIR/schema${EXT}" || {
   echo "❌ Failed to download schema binary. Version '$VERSION' may not exist."
   exit 1
 }
-chmod +x "$TMP_DIR/schema${EXT}"
+chmod 700 "$TMP_DIR/schema${EXT}"
 
 if [ "$GOOS" = "windows" ]; then
   INSTALL_DIR="$HOME/bin"
