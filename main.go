@@ -58,8 +58,7 @@ func main() {
 \___ \ / __| '_ \ / _ \  _   _ \ / _  |
  ___) | (__| | | |  __/ | | | | | (_| |
 |____/ \___|_| |_|\___|_| |_| |_|\__,_|
-%s
-`, version)
+`)
 	}
 
 	if *v {
@@ -438,35 +437,81 @@ func main() {
 	}
 
 	if migrate.isSet {
-		if migrate.String() != "true" {
-			if _, err := os.Stat(fmt.Sprintf("./%s/migrations", *rdir)); os.IsNotExist(err) {
-				err = os.Mkdir(fmt.Sprintf("./%s/migrations", *rdir), 0700)
-				if err != nil {
-					log.Fatalf("Error creating /migrations directory: %v\n", err)
+		if _, err := os.Stat(fmt.Sprintf("./%s/migrations", *rdir)); os.IsNotExist(err) {
+			err = os.Mkdir(fmt.Sprintf("./%s/migrations", *rdir), 0700)
+			if err != nil {
+				log.Fatalf("Error creating /migrations directory: %v\n", err)
+			}
+		}
+		file, err := os.Create(fmt.Sprintf("./%s/migrations/0_init.sql", *rdir))
+		if err != nil {
+			log.Fatalf("Error creating 0_init.sql file: %v\n", err)
+		}
+		defer file.Close()
+
+		var sqlTable string
+		switch *db {
+		case "sqlite":
+			sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+		case "postgres":
+			sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+		case "mysql", "mariadb":
+			sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+		default:
+			log.Fatalf("Unsupported database type: %s", *db)
+		}
+		_, err = file.WriteString(sqlTable)
+		if err != nil {
+			log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
+		}
+		CheckTableExists(conn, dbtype, *rdir)
+
+		migrationsDir := fmt.Sprintf("./%s/migrations", *rdir)
+		localMigrationFiles, err := os.ReadDir(migrationsDir)
+		if err != nil {
+			log.Fatalf("Error reading migrations directory '%s': %v\n", migrationsDir, err)
+		}
+
+		dbMigrationFiles := make(map[string]bool)
+		rows, err := conn.Query("SELECT file FROM _schema_migrations")
+		if err != nil {
+			log.Fatalf("Error querying _schema_migrations table: %v\n", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var filename string
+			if err := rows.Scan(&filename); err != nil {
+				log.Fatalf("Error scanning migration file from DB: %v\n", err)
+			}
+			dbMigrationFiles[filename] = true
+		}
+
+		var sqlInsert string
+		switch dbtype {
+		case "sqlite", "postgres":
+			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, false)"
+		case "mysql", "mariadb":
+			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES (?, false)"
+		default:
+			log.Fatalf("Unsupported database type for inserting new migration files: %s", dbtype)
+		}
+
+		for _, entry := range localMigrationFiles {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+				if _, exists := dbMigrationFiles[entry.Name()]; !exists {
+					_, err = conn.Exec(sqlInsert, entry.Name())
+					if err != nil {
+						fmt.Printf("Warning: Could not add migration file '%s' to _schema_migrations table: %v\n", entry.Name(), err)
+					} else {
+						fmt.Printf("Added new migration file '%s' to _schema_migrations table.\n", entry.Name())
+					}
 				}
 			}
-			file, err := os.Create(fmt.Sprintf("./%s/migrations/0_init.sql", *rdir))
-			if err != nil {
-				log.Fatalf("Error creating 0_init.sql file: %v\n", err)
-			}
-			defer file.Close()
+		}
 
-			var sqlTable string
-			switch *db {
-			case "sqlite":
-				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "postgres":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "mysql", "mariadb":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			default:
-				log.Fatalf("Unsupported database type: %s", *db)
-			}
-			_, err = file.WriteString(sqlTable)
-			if err != nil {
-				log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
-			}
-			fileP := fmt.Sprintf("./%s/migrations/%s.sql", *rdir, migrate.String())
+		if migrate.String() != "true" {
+			migrationFileName := migrate.String()
+			fileP := fmt.Sprintf("./%s/migrations/%s.sql", *rdir, migrationFileName)
 			sqlFile, err := os.ReadFile(fileP)
 			if err != nil {
 				log.Fatalf("Error reading SQL file: %v\n", err)
@@ -486,7 +531,7 @@ func main() {
 			default:
 				log.Fatalf("Unsupported database type: %s", dbtype)
 			}
-			_, err = conn.Exec(sqlUpdate, migrate.String())
+			_, err = conn.Exec(sqlUpdate, migrationFileName)
 			if err != nil {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
@@ -495,38 +540,9 @@ func main() {
 			if err != nil {
 				log.Fatalf("Error pulling DB schema after migration: %v\n", err)
 			}
-			fmt.Printf("Schema successfully migrated %s.sql\n", migrate.String())
+			fmt.Printf("Schema successfully migrated %s\n", migrationFileName)
 			return
 		} else {
-			if _, err := os.Stat(fmt.Sprintf("./%s/migrations", *rdir)); os.IsNotExist(err) {
-				err = os.Mkdir(fmt.Sprintf("./%s/migrations", *rdir), 0700)
-				if err != nil {
-					log.Fatalf("Error creating /migrations directory: %v\n", err)
-				}
-			}
-			file, err := os.Create(fmt.Sprintf("./%s/migrations/0_init.sql", *rdir))
-			if err != nil {
-				log.Fatalf("Error creating 0_init.sql file: %v\n", err)
-			}
-			defer file.Close()
-
-			var sqlTable string
-			switch *db {
-			case "sqlite":
-				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "postgres":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "mysql", "mariadb":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			default:
-				log.Fatalf("Unsupported database type: %s", *db)
-			}
-			_, err = file.WriteString(sqlTable)
-			if err != nil {
-				log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
-			}
-			CheckTableExists(conn, dbtype, *rdir)
-
 			rows, err := conn.Query(`SELECT file FROM _schema_migrations WHERE migrated = false ORDER BY id ASC`)
 			if err != nil {
 				log.Fatalf("Error executing SQL query for pending migrations: %v\n", err)
