@@ -13,12 +13,16 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 	_ "modernc.org/sqlite"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 var version = "dev"
@@ -35,6 +39,7 @@ func main() {
 	sql := flag.String("sql", "", "run sql commands")
 	dir := flag.String("dir", "migrations", "choose path under root-directory/")
 	rdir := flag.String("rdir", "schema", "root directory")
+	studio := flag.Bool("studio", false, "database studio")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
@@ -240,6 +245,19 @@ func main() {
 	}
 	defer conn.Close()
 
+	if *studio {
+		tables, err := getSQLTables(conn, dbtype)
+		if err != nil {
+			log.Fatalf("Error getting SQL tables: %v", err)
+		}
+
+		p := tea.NewProgram(initialModel(conn, dbtype, tables))
+		if _, err := p.Run(); err != nil {
+			log.Fatalf("Error running program: %v", err)
+		}
+		return
+	}
+
 	if *pull {
 		err = PullDBSchema(conn, dbtype, schemaPath)
 		if err != nil {
@@ -296,7 +314,7 @@ func main() {
 			if err = rows.Err(); err != nil {
 				log.Fatalf("Error iterating rows: %v\n", err)
 			}
-			printTable(columns, data)
+			fmt.Println(printTable(columns, data))
 			err = PullDBSchema(conn, dbtype, schemaPath)
 			if err != nil {
 				log.Fatalf("Error pulling DB schema after migration: %v\n", err)
@@ -344,7 +362,7 @@ func main() {
 			if err = rows.Err(); err != nil {
 				log.Fatalf("Error iterating rows: %v\n", err)
 			}
-			printTable(columns, data)
+			fmt.Println(printTable(columns, data))
 		} else {
 			result, err := conn.Exec(*sql)
 			if err != nil {
@@ -917,23 +935,23 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 
 		fkRows, err := conn.Query(`
     SELECT
-        kcu.table_name AS from_table,
-        kcu.column_name AS from_column,
-        ccu.table_name AS to_table,
-        ccu.column_name AS to_column,
-        rc.delete_rule,
-        rc.update_rule
+      kcu.table_name AS from_table,
+      kcu.column_name AS from_column,
+      ccu.table_name AS to_table,
+      ccu.column_name AS to_column,
+      rc.delete_rule,
+      rc.update_rule
     FROM
-        information_schema.table_constraints AS tc
-        JOIN information_schema.key_column_usage AS kcu
-            ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-        JOIN information_schema.referential_constraints AS rc
-            ON tc.constraint_name = rc.constraint_name
-            AND tc.table_schema = rc.constraint_schema
-        JOIN information_schema.constraint_column_usage AS ccu
-            ON rc.unique_constraint_name = ccu.constraint_name
-            AND rc.constraint_schema = ccu.constraint_schema
+      information_schema.table_constraints AS tc
+      JOIN information_schema.key_column_usage AS kcu
+        ON tc.constraint_name = kcu.constraint_name
+        AND tc.table_schema = kcu.table_schema
+      JOIN information_schema.referential_constraints AS rc
+        ON tc.constraint_name = rc.constraint_name
+        AND tc.table_schema = rc.constraint_schema
+      JOIN information_schema.constraint_column_usage AS ccu
+        ON rc.unique_constraint_name = ccu.constraint_name
+        AND rc.constraint_schema = ccu.constraint_schema
     WHERE tc.constraint_type = 'FOREIGN KEY'
     AND tc.table_schema = 'public'
     ORDER BY from_table, from_column;
@@ -1079,13 +1097,13 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	return nil
 }
 
-func printTable(headers []string, data [][]string) {
+func printTable(headers []string, data [][]string) string {
+	lightGray := lipgloss.Color("240")
 	gray := lipgloss.Color("245")
-	lightGray := lipgloss.Color("241")
-	purple := lipgloss.Color("#FFFFFF")
+	white := lipgloss.Color("#FFFFFF")
 
 	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(purple)).
+		Foreground(lipgloss.Color(white)).
 		Bold(true).
 		Align(lipgloss.Center)
 	cellBaseStyle := lipgloss.NewStyle().Padding(0, 1)
@@ -1094,7 +1112,6 @@ func printTable(headers []string, data [][]string) {
 
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(purple)).
 		Headers(headers...).
 		Rows(data...).
 		StyleFunc(func(row, col int) lipgloss.Style {
@@ -1108,7 +1125,7 @@ func printTable(headers []string, data [][]string) {
 			}
 		})
 
-	fmt.Println(t.Render())
+	return t.Render()
 }
 
 func flagUsed(name string) bool {
@@ -1119,4 +1136,381 @@ func flagUsed(name string) bool {
 		}
 	})
 	return found
+}
+
+var (
+	appStyle = lipgloss.NewStyle()
+
+	inputStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true).
+			BorderForeground(lipgloss.Color("240"))
+
+	tableListPaneStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, true, false, false).
+				BorderForeground(lipgloss.Color("240")).
+				Width(25)
+
+	tableDataPaneStyle  = lipgloss.NewStyle().PaddingLeft(1)
+	selectedItemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
+	unselectedItemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	headerStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Bold(true).Underline(true)
+	errorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	footerStyle         = lipgloss.NewStyle().MarginTop(1).Padding(0, 1)
+	keyStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
+	descStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+)
+
+type model struct {
+	db                 *sql.DB
+	dbType             string
+	sqlTextarea        textarea.Model
+	viewport           viewport.Model
+	focusedPane        int
+	tables             []string
+	cursor             int
+	selectedTable      string
+	columns            []string
+	data               [][]string
+	queryColumns       []string
+	queryData          [][]string
+	queryError         error
+	showingQueryResult bool
+	width              int
+	height             int
+}
+
+func initialModel(db *sql.DB, dbType string, tables []string) model {
+	ta := textarea.New()
+	ta.Placeholder = "Input SQL query"
+	ta.Focus()
+	ta.ShowLineNumbers = false
+	ta.SetHeight(5)
+	ta.Prompt = " "
+
+	vp := viewport.New(80, 20)
+	vp.SetContent("Select a table to view its data or run a query.")
+
+	return model{
+		db:          db,
+		dbType:      dbType,
+		sqlTextarea: ta,
+		viewport:    vp,
+		focusedPane: 0,
+		tables:      tables,
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return textarea.Blink
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var (
+		cmd  tea.Cmd
+		cmds []tea.Cmd
+	)
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		inputHeight := lipgloss.Height(m.sqlTextarea.View())
+		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
+
+		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
+		m.viewport.Width = m.width - tableListPaneStyle.GetWidth() - appStyle.GetHorizontalPadding() - appStyle.GetHorizontalFrameSize() - tableDataPaneStyle.GetHorizontalPadding() - tableListPaneStyle.GetHorizontalFrameSize()
+		m.viewport.Height = paneHeight
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+
+		case "tab":
+			m.focusedPane = (m.focusedPane + 1) % 3
+			if m.focusedPane == 0 {
+				m.sqlTextarea.Focus()
+			} else {
+				m.sqlTextarea.Blur()
+			}
+			return m, cmd
+
+		case "f5":
+			if m.focusedPane == 0 {
+				query := m.sqlTextarea.Value()
+				if query != "" {
+					m.executeSQLQuery(query)
+				}
+			}
+		}
+
+		switch m.focusedPane {
+		case 1:
+			switch msg.String() {
+			case "enter":
+				if len(m.tables) > 0 {
+					m.selectedTable = m.tables[m.cursor]
+					m.showingQueryResult = false
+					m.loadTableData(m.selectedTable)
+				}
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+				}
+			case "down", "j":
+				if m.cursor < len(m.tables)-1 {
+					m.cursor++
+				}
+			}
+		case 2:
+			switch msg.String() {
+			case "left", "h":
+				m.viewport.ScrollLeft(1)
+			case "right", "l":
+				m.viewport.ScrollRight(1)
+			}
+		}
+	}
+
+	if m.focusedPane == 0 {
+		m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
+		cmds = append(cmds, cmd)
+	} else {
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) View() string {
+	listStyle := tableListPaneStyle
+	dataStyle := tableDataPaneStyle
+	switch m.focusedPane {
+	case 1:
+		listStyle = tableListPaneStyle.BorderForeground(lipgloss.Color("170"))
+	case 2:
+		dataStyle = tableDataPaneStyle.Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("170"))
+	}
+
+	inputView := inputStyle.Render(m.sqlTextarea.View())
+
+	tableListContent := strings.Builder{}
+	for i, table := range m.tables {
+		style := unselectedItemStyle
+		cursor := "  "
+		if m.cursor == i {
+			cursor = "> "
+			if m.focusedPane == 1 {
+				style = selectedItemStyle
+			}
+		}
+		if table == m.selectedTable && !m.showingQueryResult {
+			style = selectedItemStyle.Underline(true)
+		}
+		tableListContent.WriteString(style.Render(fmt.Sprintf("%s%s", cursor, table)) + "\n")
+	}
+
+	var help strings.Builder
+	help.WriteString(keyStyle.Render("Tab"))
+	help.WriteString(descStyle.Render(" Focus Next ") + "• ")
+	help.WriteString(keyStyle.Render("F5"))
+	help.WriteString(descStyle.Render(" Run Query ") + "• ")
+	help.WriteString(keyStyle.Render("↑/↓/←/→/k/j/h/l"))
+	help.WriteString(descStyle.Render(" Navigate/Scroll ") + "• ")
+	help.WriteString(keyStyle.Render("Ctrl+c"))
+	help.WriteString(descStyle.Render(" Quit"))
+
+	footerView := footerStyle.Render(help.String())
+
+	finalTableListContent := listStyle.Render(tableListContent.String())
+	finalTableDataContent := dataStyle.Render(m.viewport.View())
+
+	horizontalPanes := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		finalTableListContent,
+		finalTableDataContent,
+	)
+
+	return appStyle.Render(lipgloss.JoinVertical(
+		lipgloss.Left,
+		inputView,
+		horizontalPanes,
+		footerView,
+	))
+}
+
+func (m *model) executeSQLQuery(query string) {
+	m.queryError = nil
+	m.queryColumns = nil
+	m.queryData = nil
+	m.showingQueryResult = true
+
+	rows, err := m.db.Query(query)
+	if err != nil {
+		m.queryError = err
+		return
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		m.queryError = fmt.Errorf("failed to get columns from query result: %w", err)
+		return
+	}
+
+	m.queryColumns = cols
+
+	values := make([]sql.RawBytes, len(cols))
+	scanArgs := make([]any, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	var data [][]string
+	for rows.Next() {
+		err = rows.Scan(scanArgs...)
+		if err != nil {
+			m.queryError = fmt.Errorf("failed to scan row data from query result: %w", err)
+			return
+		}
+
+		var row []string
+		for _, colVal := range values {
+			if colVal == nil {
+				row = append(row, "NULL")
+			} else {
+				row = append(row, string(colVal))
+			}
+		}
+		data = append(data, row)
+	}
+	m.queryData = data
+
+	if err := rows.Err(); err != nil {
+		m.queryError = fmt.Errorf("rows iteration error for query result: %w", err)
+		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
+		return
+	}
+
+	m.viewport.SetContent(printTable(m.queryColumns, m.queryData))
+	m.viewport.GotoTop()
+}
+
+func (m *model) loadTableData(tableName string) error {
+	m.queryError = nil
+	m.columns = nil
+	m.data = nil
+	m.showingQueryResult = false
+
+	var cols []string
+	var err error
+	var query string
+	switch m.dbType {
+	case "sqlite":
+		query = `SELECT name FROM PRAGMA_TABLE_INFO($1);`
+	case "postgres":
+		query = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;`
+	case "mysql", "mariadb":
+		query = `SELECT column_name	FROM information_schema.columns	WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position;`
+	default:
+		return fmt.Errorf("unsupported database type for loading table data: %s", m.dbType)
+	}
+
+	rows, err := m.db.Query(query, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get table info for %s (%s): %w", tableName, m.dbType, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("failed to scan column info (%s): %w", m.dbType, err)
+		}
+		cols = append(cols, name)
+	}
+	m.columns = cols
+
+	dataRows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 25;", tableName))
+	if err != nil {
+		return fmt.Errorf("failed to query data for %s: %w", tableName, err)
+	}
+	defer dataRows.Close()
+
+	var tableData [][]string
+	if len(cols) > 0 {
+		values := make([]sql.RawBytes, len(cols))
+		scanArgs := make([]any, len(values))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+
+		for dataRows.Next() {
+			err = dataRows.Scan(scanArgs...)
+			if err != nil {
+				return fmt.Errorf("failed to scan row data: %w", err)
+			}
+
+			var row []string
+			for _, colVal := range values {
+				if colVal == nil {
+					row = append(row, "NULL")
+				} else {
+					row = append(row, string(colVal))
+				}
+			}
+			tableData = append(tableData, row)
+		}
+	}
+	m.data = tableData
+
+	if err := dataRows.Err(); err != nil {
+		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Error:\n%v", err)))
+		return fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	if len(m.columns) > 0 {
+		m.viewport.SetContent(printTable(m.columns, m.data))
+	} else {
+		m.viewport.SetContent("No columns found or table is empty.")
+	}
+	m.viewport.GotoTop()
+
+	return nil
+}
+
+func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
+	var query string
+	switch dbType {
+	case "sqlite":
+		query = "SELECT name FROM sqlite_master WHERE type='table';"
+	case "postgres":
+		query = "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"
+	case "mysql", "mariadb":
+		query = "SHOW TABLES;"
+	default:
+		return nil, fmt.Errorf("unsupported database type for listing tables: %s", dbType)
+	}
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tables (%s): %w", dbType, err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, fmt.Errorf("failed to scan table name (%s): %w", dbType, err)
+		}
+		tables = append(tables, tableName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error (%s): %w", dbType, err)
+	}
+
+	return tables, nil
 }
