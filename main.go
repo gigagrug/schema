@@ -94,6 +94,7 @@ func main() {
 		fmt.Println("Latest Version:", latestVersion)
 		if version != latestVersion {
 			fmt.Printf("Outdated! Update to latest version: %s\n", latestVersion)
+			fmt.Printf("curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | sh -s\n")
 		} else {
 			fmt.Println("Using latest version")
 		}
