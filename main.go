@@ -64,6 +64,7 @@ func main() {
  ___) | (__| | | |  __/ | | | | | (_| |
 |____/ \___|_| |_|\___|_| |_| |_|\__,_|
 `)
+		return
 	}
 
 	if *v {
@@ -98,6 +99,7 @@ func main() {
 		} else {
 			fmt.Println("Using latest version")
 		}
+		return
 	}
 
 	schemaPath := fmt.Sprintf("./%s/db.schema", *rdir)
@@ -1350,6 +1352,8 @@ func (m *model) executeSQLQuery(query string) {
 	rows, err := m.db.Query(query)
 	if err != nil {
 		m.queryError = err
+		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
+		m.viewport.GotoTop()
 		return
 	}
 	defer rows.Close()
@@ -1357,6 +1361,8 @@ func (m *model) executeSQLQuery(query string) {
 	cols, err := rows.Columns()
 	if err != nil {
 		m.queryError = fmt.Errorf("failed to get columns from query result: %w", err)
+		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
+		m.viewport.GotoTop()
 		return
 	}
 
@@ -1373,6 +1379,8 @@ func (m *model) executeSQLQuery(query string) {
 		err = rows.Scan(scanArgs...)
 		if err != nil {
 			m.queryError = fmt.Errorf("failed to scan row data from query result: %w", err)
+			m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
+			m.viewport.GotoTop()
 			return
 		}
 
@@ -1391,10 +1399,17 @@ func (m *model) executeSQLQuery(query string) {
 	if err := rows.Err(); err != nil {
 		m.queryError = fmt.Errorf("rows iteration error for query result: %w", err)
 		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
+		m.viewport.GotoTop()
 		return
 	}
 
-	m.viewport.SetContent(printTable(m.queryColumns, m.queryData))
+	if m.queryError == nil {
+		if len(m.queryColumns) > 0 || len(m.queryData) > 0 {
+			m.viewport.SetContent(printTable(m.queryColumns, m.queryData))
+		} else {
+			m.viewport.SetContent("Query executed successfully, no rows returned or no data to display.")
+		}
+	}
 	m.viewport.GotoTop()
 }
 
