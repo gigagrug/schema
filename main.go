@@ -53,7 +53,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  schema -migrate")
 		fmt.Fprintln(os.Stderr, `  schema -migrate="1_createuser"`)
 		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -create="insertusers"`)
-		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -migrate="0_insertusers"`)
+		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -sql="0_insertusers.sql"`)
 	}
 	flag.Parse()
 	if flag.NFlag() == 0 {
@@ -68,7 +68,7 @@ func main() {
 	}
 
 	if *v {
-		fmt.Println("Current Version:", version)
+		fmt.Println("Version:", version)
 
 		url := "https://api.github.com/repos/gigagrug/schema/releases/latest"
 		resp, err := http.Get(url)
@@ -92,9 +92,9 @@ func main() {
 		if !ok {
 			log.Fatalf("Could not find 'tag_name' or it was not a string in the GitHub release data\n")
 		}
-		fmt.Println("Latest Version:", latestVersion)
+
 		if version != latestVersion {
-			fmt.Printf("Outdated! Update to latest version: %s\n", latestVersion)
+			fmt.Printf("Outdated! Latest version: %s\n", latestVersion)
 			fmt.Printf("curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | sh -s\n")
 		} else {
 			fmt.Println("Using latest version")
@@ -384,33 +384,6 @@ func main() {
 
 	if *create != "" {
 		if *dir == "migrations" {
-			if _, err := os.Stat(fmt.Sprintf("./%s/migrations", *rdir)); os.IsNotExist(err) {
-				err = os.Mkdir(fmt.Sprintf("./%s/migrations", *rdir), 0700)
-				if err != nil {
-					log.Fatalf("Error creating /migrations directory: %v\n", err)
-				}
-			}
-			file, err := os.Create(fmt.Sprintf("./%s/migrations/0_init.sql", *rdir))
-			if err != nil {
-				log.Fatalf("Error creating 0_init.sql file: %v\n", err)
-			}
-			defer file.Close()
-
-			var sqlTable string
-			switch dbtype {
-			case "sqlite":
-				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "postgres":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "mysql", "mariadb":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			default:
-				log.Fatalf("Unsupported database type: %s", *db)
-			}
-			_, err = file.WriteString(sqlTable)
-			if err != nil {
-				log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
-			}
 			CheckTableExists(conn, dbtype, *rdir)
 		}
 		dirPath := fmt.Sprintf("./%s/%s/", *rdir, *dir)
@@ -458,33 +431,6 @@ func main() {
 	}
 
 	if migrate.isSet {
-		if _, err := os.Stat(fmt.Sprintf("./%s/migrations", *rdir)); os.IsNotExist(err) {
-			err = os.Mkdir(fmt.Sprintf("./%s/migrations", *rdir), 0700)
-			if err != nil {
-				log.Fatalf("Error creating /migrations directory: %v\n", err)
-			}
-		}
-		file, err := os.Create(fmt.Sprintf("./%s/migrations/0_init.sql", *rdir))
-		if err != nil {
-			log.Fatalf("Error creating 0_init.sql file: %v\n", err)
-		}
-		defer file.Close()
-
-		var sqlTable string
-		switch *db {
-		case "sqlite":
-			sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-		case "postgres":
-			sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-		case "mysql", "mariadb":
-			sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-		default:
-			log.Fatalf("Unsupported database type: %s", *db)
-		}
-		_, err = file.WriteString(sqlTable)
-		if err != nil {
-			log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
-		}
 		CheckTableExists(conn, dbtype, *rdir)
 
 		migrationsDir := fmt.Sprintf("./%s/migrations", *rdir)
@@ -667,7 +613,38 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 	err := conn.QueryRow(query).Scan(&name)
 
 	if err == sql.ErrNoRows {
-		sqlFile, err := os.ReadFile(fmt.Sprintf("./%s/migrations/0_init.sql", rdir))
+		migrationsDir := fmt.Sprintf("./%s/migrations", rdir)
+		if _, dirErr := os.Stat(migrationsDir); os.IsNotExist(dirErr) {
+			err = os.MkdirAll(migrationsDir, 0700)
+			if err != nil {
+				log.Fatalf("Error creating migrations directory: %v\n", err)
+			}
+		}
+
+		initFilePath := fmt.Sprintf("./%s/migrations/0_init.sql", rdir)
+		if _, fileErr := os.Stat(initFilePath); os.IsNotExist(fileErr) {
+			file, err := os.Create(initFilePath)
+			if err != nil {
+				log.Fatalf("Error creating 0_init.sql file: %v\n", err)
+			}
+			defer file.Close()
+
+			var sqlTable string
+			switch dbtype {
+			case "sqlite":
+				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+			case "postgres":
+				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+			case "mysql", "mariadb":
+				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+			}
+			_, err = file.WriteString(sqlTable)
+			if err != nil {
+				log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
+			}
+		}
+
+		sqlFile, err := os.ReadFile(initFilePath)
 		if err != nil {
 			log.Fatalf("Error reading SQL file: %v\n", err)
 		}
@@ -1156,7 +1133,6 @@ var (
 	tableDataPaneStyle  = lipgloss.NewStyle().PaddingLeft(1)
 	selectedItemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
 	unselectedItemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	headerStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Bold(true).Underline(true)
 	errorStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	footerStyle         = lipgloss.NewStyle().MarginTop(1).Padding(0, 1)
 	keyStyle            = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)

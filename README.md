@@ -1,5 +1,5 @@
 # Schema
-A language agnostic CLI tool for handling database | SQLite, PostgreSQL, MySQL, MariaDB
+A CLI tool for working with the database | SQLite, PostgreSQL, MySQL, MariaDB
 
 ## Installation
 Install/upgrade latest version
@@ -39,7 +39,7 @@ schema -create="initschema"
 ```
 ### Step 2
 Go to ./schema/migrations/1_initschema.sql (This SQL is for sqlite)
-```shell
+```sql
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -74,7 +74,7 @@ schema -create="insertdata" -dir="inserts"
 ```
 ### Step 2
 Insert based on the SQL schema above. 
-```shell
+```sql
 WITH RECURSIVE generate_users AS (
   SELECT ABS(RANDOM() % 10000) AS random_number, 1 AS row_number
   UNION ALL
@@ -117,11 +117,18 @@ schema -sql="SELECT * FROM users"
 ```
 ![table](https://github.com/user-attachments/assets/480da223-a17b-49ab-9ad0-246c606488f8)
 
+## TUI SQL Studio
+### Step 1
+```shell
+schema -studio
+```
+
 ## Flags
 v: prints your version and latest version <br>
 i: initializes project<br>
 pull: pulls database schema <br>
 migrate: migrates all file in migrations dir <br>
+studio: tui sql studio<br>
 migrate="[select file under migrations/]" <br>
 sql="[select .sql file or input the sql query directly]" <br>
 db="[sqlite, postgres, mysql, mariadb]" (default sqlite) <br>

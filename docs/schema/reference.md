@@ -53,3 +53,7 @@ schema -dir="directory"
 ```shell
 schema -rdir="root-directory"
 ```
+### Studio
+```shell
+schema -studio
+```
