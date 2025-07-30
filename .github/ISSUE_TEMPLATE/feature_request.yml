@@ -1,0 +1,32 @@
+name: Feature Request
+description: Feature Request.
+labels: "enhancement"
+assignees: "gigagrug"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your interest in the project and taking the time to fill out this feature report!
+    id: feature-description
+    attributes:
+      label: Describe the feature
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Example/Potential Solution
+    validations:
+      required: false
+  - type: checkboxes
+    id: checkboxes
+    attributes:
+      label: Validations
+      description: Before submitting the issue, please make sure you do the following
+      options:
+        - label: Made sure you're on the latest version.
+          required: true
+        - label: Read the docs.
+          required: true
+        - label: Check that there isn't already an issue that reports the same feature.
+          required: true
