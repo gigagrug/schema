@@ -1,6 +1,8 @@
 # Schema
 A CLI tool for working with the database | SQLite, PostgreSQL, MySQL, MariaDB
 
+![cli](https://github.com/user-attachments/assets/6d175b45-0cec-45bd-a15c-962f9a3acb80)
+
 ## Installation
 Install/upgrade latest version
 ```shell
@@ -122,6 +124,7 @@ schema -sql="SELECT * FROM users"
 ```shell
 schema -studio
 ```
+![tui](https://github.com/user-attachments/assets/786c4d59-e87c-49fe-8aa7-2c9f3ab46934)
 
 ## Flags
 v: prints your version and latest version <br>
