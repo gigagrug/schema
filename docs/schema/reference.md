@@ -57,3 +57,4 @@ schema -rdir="root-directory"
 ```shell
 schema -studio
 ```
+![studio](../assets/studio.png)

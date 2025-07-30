@@ -55,7 +55,12 @@ jobs:
         with:
           tag_name: ${{ inputs.version }}
           name: ${{ inputs.version }}
-          body: ${{ inputs.version }}
+          body: |
+            Update by running:
+            ```shell
+            curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | sh -s
+            ```
+          generate_release_notes: true
           files: dist/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

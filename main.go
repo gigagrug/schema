@@ -498,7 +498,7 @@ func main() {
 			default:
 				log.Fatalf("Unsupported database type: %s", dbtype)
 			}
-			_, err = conn.Exec(sqlUpdate, migrationFileName)
+			_, err = conn.Exec(sqlUpdate, migrationFileName+".sql")
 			if err != nil {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
