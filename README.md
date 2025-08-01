@@ -125,15 +125,15 @@ schema -studio
 ![studio](./docs/assets/studio.png)
 
 ## Flags
-v: prints your version and latest version <br>
-i: initializes project<br>
-pull: pulls database schema <br>
-migrate: migrates all file in migrations dir <br>
-studio: tui sql studio<br>
-migrate="[select file under migrations/]" <br>
-sql="[select .sql file or input the sql query directly]" <br>
-db="[sqlite, libsql, postgres, mysql, mariadb]" (default sqlite) <br>
-url="[database url]" (default ./schema/dev.db) <br>
-create="[file name]": create file the number and .sql is added for you "1_filename.sql" <br>
-dir="[choose/create directory under schema/]" (default migration) <br>
-rdir="[choose/create root directory]" (default schema)
+`v`: prints your version and latest version <br>
+`i`: initializes project<br>
+`pull`: pulls database schema <br>
+`migrate`: migrates all file in migrations dir <br>
+`studio`: tui sql studio<br>
+`migrate="[select file under migrations/]"` <br>
+`sql="[select .sql file or input the sql query directly]"` <br>
+`db="[sqlite, postgres, mysql, mariadb]"` (default sqlite) <br>
+`url="[database url]"` (default ./schema/dev.db) <br>
+`create="[file name]"`: create file the number and .sql is added for you "1_filename.sql" <br>
+`dir="[choose/create directory under schema/]"` (default migration) <br>
+`rdir="[choose/create root directory]"` (default schema)
