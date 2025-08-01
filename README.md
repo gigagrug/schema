@@ -132,7 +132,7 @@ schema -studio
 `studio`: tui sql studio<br>
 `migrate="[select file under migrations/]"` <br>
 `sql="[select .sql file or input the sql query directly]"` <br>
-`db="[sqlite, postgres, mysql, mariadb]"` (default sqlite) <br>
+`db="[sqlite, libsql, postgres, mysql, mariadb]"` (default sqlite) <br>
 `url="[database url]"` (default ./schema/dev.db) <br>
 `create="[file name]"`: create file the number and .sql is added for you "1_filename.sql" <br>
 `dir="[choose/create directory under schema/]"` (default migration) <br>
