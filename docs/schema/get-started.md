@@ -11,7 +11,7 @@ Init project (default: db=sqlite url=./schema/dev.db)
 ```shell
 schema -i
 ```
-Init project using another db and url (sqlite, postrges, mysql, mariadb)
+Init project using another db and url (sqlite, libsql, postrges, mysql, mariadb)
 ```shell
 schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
 ```

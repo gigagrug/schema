@@ -1,5 +1,5 @@
 # Schema
-A CLI tool for working with the database | SQLite, PostgreSQL, MySQL, MariaDB
+A CLI tool for working with the database | SQLite, libSQL, PostgreSQL, MySQL, MariaDB
 
 ![schema](./docs/assets/schema.png)
 
@@ -19,7 +19,7 @@ Init project (default: db=sqlite url=./schema/dev.db)
 ```shell
 schema -i
 ```
-Init project using another db and url (sqlite, postrges, mysql, mariadb)
+Init project using another db and url
 ```shell
 schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
 ```
@@ -132,7 +132,7 @@ migrate: migrates all file in migrations dir <br>
 studio: tui sql studio<br>
 migrate="[select file under migrations/]" <br>
 sql="[select .sql file or input the sql query directly]" <br>
-db="[sqlite, postgres, mysql, mariadb]" (default sqlite) <br>
+db="[sqlite, libsql, postgres, mysql, mariadb]" (default sqlite) <br>
 url="[database url]" (default ./schema/dev.db) <br>
 create="[file name]": create file the number and .sql is added for you "1_filename.sql" <br>
 dir="[choose/create directory under schema/]" (default migration) <br>

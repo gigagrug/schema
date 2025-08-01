@@ -16,6 +16,7 @@ hero:
 
 features:
   - title: SQLite
+  - title: libSQL
   - title: PostgreSQL
   - title: MySQL
   - title: MariaDB
