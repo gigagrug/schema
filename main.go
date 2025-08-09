@@ -766,7 +766,26 @@ func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
 	}
 	return conn, dbType, nil
 }
-
+func splitOnTopLevelCommas(s string) []string {
+	var parts []string
+	parenLevel := 0
+	lastSplit := 0
+	for i, char := range s {
+		switch char {
+		case '(':
+			parenLevel++
+		case ')':
+			parenLevel--
+		case ',':
+			if parenLevel == 0 {
+				parts = append(parts, s[lastSplit:i])
+				lastSplit = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[lastSplit:])
+	return parts
+}
 func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	var schema string
 	type ForeignKey struct {
@@ -780,7 +799,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	}
 	switch dbtype {
 	case "sqlite", "libsql":
-		rows, err := conn.Query("SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
+		rows, err := conn.Query("SELECT sql FROM sqlite_master WHERE sql NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
 		if err != nil {
 			return fmt.Errorf("error querying sqlite: %w", err)
 		}
@@ -792,21 +811,26 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 			if err := rows.Scan(&createStmt); err != nil {
 				return fmt.Errorf("error scanning sqlite row: %w", err)
 			}
-			modifiedStmt := strings.Replace(createStmt, "CREATE TABLE ", "table ", 1)
-			formattedStmt := modifiedStmt
-			if strings.Contains(formattedStmt, "(") && strings.Contains(formattedStmt, ")") {
+			formattedStmt := strings.Replace(createStmt, "CREATE TABLE ", "table ", 1)
+			formattedStmt = strings.Replace(formattedStmt, "CREATE UNIQUE INDEX", "UNIQUE", 1)
+			formattedStmt = strings.Replace(formattedStmt, "CREATE INDEX", "INDEX", 1)
+
+			if strings.Contains(formattedStmt, "(") {
 				openParen := strings.Index(formattedStmt, "(")
 				closeParen := strings.LastIndex(formattedStmt, ")")
 
-				tableNamePart := formattedStmt[:openParen+1]
-				columnsPart := formattedStmt[openParen+1 : closeParen]
-				restOfStmt := formattedStmt[closeParen:]
-				columnDefs := strings.Split(columnsPart, ",")
-				for i, colDef := range columnDefs {
-					columnDefs[i] = "  " + strings.TrimSpace(colDef)
+				if openParen != -1 && closeParen > openParen {
+					tableNamePart := formattedStmt[:openParen+1]
+					columnsPart := formattedStmt[openParen+1 : closeParen]
+					restOfStmt := formattedStmt[closeParen:]
+					columnDefs := splitOnTopLevelCommas(columnsPart)
+
+					for i, colDef := range columnDefs {
+						columnDefs[i] = "\t" + strings.TrimSpace(colDef)
+					}
+					formattedColumns := strings.Join(columnDefs, ",\n")
+					formattedStmt = tableNamePart + "\n" + formattedColumns + "\n" + restOfStmt
 				}
-				formattedColumns := strings.Join(columnDefs, ",\n")
-				formattedStmt = tableNamePart + "\n" + formattedColumns + "\n" + restOfStmt
 			}
 			tableSchemas = append(tableSchemas, formattedStmt)
 		}
