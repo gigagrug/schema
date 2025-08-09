@@ -65,7 +65,7 @@ schema -migrate
 ```
 Migrates specific sql file
 ```shell
-schema -migrate="1_initschema.sql"
+schema -migrate="1_initschema"
 ```
 
 ## Insert Dummy Data
