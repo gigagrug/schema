@@ -415,9 +415,9 @@ func main() {
 		if *dir == "migrations" {
 			var sqlInsert string
 			switch dbtype {
-			case "sqlite", "postgres":
+			case "postgres":
 				sqlInsert = "INSERT INTO _schema_migrations (file) VALUES ($1)"
-			case "libsql", "mysql", "mariadb":
+			case "sqlite", "libsql", "mysql", "mariadb":
 				sqlInsert = "INSERT INTO _schema_migrations (file) VALUES (?)"
 			default:
 				log.Fatalf("Unsupported database type: %s", dbtype)
@@ -456,9 +456,9 @@ func main() {
 
 		var sqlInsert string
 		switch dbtype {
-		case "sqlite", "postgres":
+		case "postgres":
 			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, false)"
-		case "libsql", "mysql", "mariadb":
+		case "sqlite", "libsql", "mysql", "mariadb":
 			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES (?, false)"
 		default:
 			log.Fatalf("Unsupported database type for inserting new migration files: %s", dbtype)
@@ -492,9 +492,9 @@ func main() {
 
 			var sqlUpdate string
 			switch dbtype {
-			case "sqlite", "postgres":
+			case "postgres":
 				sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = $1"
-			case "libsql", "mysql", "mariadb":
+			case "sqlite", "libsql", "mysql", "mariadb":
 				sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = ?"
 			default:
 				log.Fatalf("Unsupported database type: %s", dbtype)
@@ -549,9 +549,9 @@ func main() {
 
 				var sqlUpdate string
 				switch dbtype {
-				case "sqlite", "postgres":
+				case "postgres":
 					sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = $1"
-				case "libsql", "mysql", "mariadb":
+				case "sqlite", "libsql", "mysql", "mariadb":
 					sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = ?"
 				default:
 					log.Fatalf("Migrate2: Unsupported database type: %s", dbtype)
@@ -659,9 +659,9 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 
 		var sqlInsert string
 		switch dbtype {
-		case "sqlite", "postgres":
+		case "postgres":
 			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, true)"
-		case "libsql", "mysql", "mariadb":
+		case "sqlite", "libsql", "mysql", "mariadb":
 			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES (?, true)"
 		}
 		_, err = conn.Exec(sqlInsert, "0_init.sql")
@@ -1273,9 +1273,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case 2:
 			switch msg.String() {
 			case "left", "h":
-				m.viewport.ScrollLeft(1)
+				m.viewport.ScrollLeft(10)
 			case "right", "l":
-				m.viewport.ScrollRight(1)
+				m.viewport.ScrollRight(10)
 			}
 		}
 	}
@@ -1428,9 +1428,7 @@ func (m *model) loadTableData(tableName string) error {
 	var err error
 	var query string
 	switch m.dbType {
-	case "sqlite":
-		query = `SELECT name FROM PRAGMA_TABLE_INFO($1);`
-	case "libsql":
+	case "sqlite", "libsql":
 		query = `SELECT name FROM PRAGMA_TABLE_INFO(?);`
 	case "postgres":
 		query = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;`
