@@ -20,6 +20,9 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
+	"github.com/tliron/commonlog"
+	protocol "github.com/tliron/glsp/protocol_3_16"
+	"github.com/tliron/glsp/server"
 	_ "modernc.org/sqlite"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,6 +44,7 @@ func main() {
 	dir := flag.String("dir", "migrations", "choose path under root-directory/")
 	rdir := flag.String("rdir", "schema", "root directory")
 	studio := flag.Bool("studio", false, "database studio")
+	lsp := flag.Bool("lsp", false, "run language server")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
@@ -65,6 +69,22 @@ func main() {
  ___) | (__| | | |  __/ | | | | | (_| |
 |____/ \___|_| |_|\___|_| |_| |_|\__,_|
 `)
+		return
+	}
+
+	if *lsp {
+		log.Println("Starting LSP server...")
+		commonlog.Configure(1, nil)
+		handler = protocol.Handler{
+			Initialize:             initialize,
+			Initialized:            initialized,
+			Shutdown:               shutdown,
+			SetTrace:               setTrace,
+			TextDocumentCompletion: textDocumentCompletion,
+		}
+
+		server := server.NewServer(&handler, lspName, false)
+		server.RunStdio()
 		return
 	}
 
@@ -1106,6 +1126,16 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	return nil
 }
 
+func flagUsed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func printTable(headers []string, data [][]string) string {
 	lightGray := lipgloss.Color("240")
 	gray := lipgloss.Color("245")
@@ -1135,16 +1165,6 @@ func printTable(headers []string, data [][]string) string {
 		})
 
 	return t.Render()
-}
-
-func flagUsed(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
 }
 
 var (
