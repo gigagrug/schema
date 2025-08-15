@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -1205,6 +1206,8 @@ type model struct {
 	showingQueryResult bool
 	width              int
 	height             int
+	searchInput        textinput.Model
+	isSearching        bool
 }
 
 func initialModel(db *sql.DB, dbType string, tables []string) model {
@@ -1218,6 +1221,12 @@ func initialModel(db *sql.DB, dbType string, tables []string) model {
 	vp := viewport.New(80, 20)
 	vp.SetContent("Select a table to view its data or run a query.")
 
+	ti := textinput.New()
+	ti.Placeholder = "Search tables..."
+	ti.CharLimit = 50
+	ti.Width = 20
+	ti.Prompt = " / "
+
 	return model{
 		db:          db,
 		dbType:      dbType,
@@ -1225,6 +1234,7 @@ func initialModel(db *sql.DB, dbType string, tables []string) model {
 		viewport:    vp,
 		focusedPane: 0,
 		tables:      tables,
+		searchInput: ti,
 	}
 }
 
@@ -1246,14 +1256,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
 
 		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
+		m.searchInput.Width = tableListPaneStyle.GetWidth() - 3
 		m.viewport.Width = m.width - tableListPaneStyle.GetWidth() - appStyle.GetHorizontalPadding() - appStyle.GetHorizontalFrameSize() - tableDataPaneStyle.GetHorizontalPadding() - tableListPaneStyle.GetHorizontalFrameSize()
 		m.viewport.Height = paneHeight
 
 	case tea.KeyMsg:
+		filteredTables := m.getFilteredTables()
+
+		if m.focusedPane == 1 && m.isSearching {
+			switch msg.String() {
+			case "enter":
+				m.isSearching = false
+				m.searchInput.Blur()
+				return m, nil
+			case "esc":
+				m.isSearching = false
+				m.searchInput.Blur()
+				m.searchInput.SetValue("")
+				m.resetCursor()
+				return m, nil
+			default:
+				var searchCmd tea.Cmd
+				m.searchInput, searchCmd = m.searchInput.Update(msg)
+				m.resetCursor()
+				return m, searchCmd
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
-
+		case "esc":
+			if m.focusedPane == 0 {
+				m.sqlTextarea.SetValue("")
+				return m, textinput.Blink
+			}
 		case "tab":
 			m.focusedPane = (m.focusedPane + 1) % 3
 			if m.focusedPane == 0 {
@@ -1261,7 +1298,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.sqlTextarea.Blur()
 			}
-			return m, cmd
+			return m, nil
 
 		case "f5":
 			if m.focusedPane == 0 {
@@ -1275,9 +1312,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.focusedPane {
 		case 1:
 			switch msg.String() {
+			case "/":
+				m.isSearching = true
+				m.searchInput.Focus()
+				return m, textinput.Blink
 			case "enter":
-				if len(m.tables) > 0 {
-					m.selectedTable = m.tables[m.cursor]
+				if len(filteredTables) > 0 && m.cursor < len(filteredTables) {
+					m.selectedTable = filteredTables[m.cursor]
 					m.showingQueryResult = false
 					m.loadTableData(m.selectedTable)
 				}
@@ -1286,7 +1327,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor--
 				}
 			case "down", "j":
-				if m.cursor < len(m.tables)-1 {
+				if m.cursor < len(filteredTables)-1 {
 					m.cursor++
 				}
 			}
@@ -1323,13 +1364,16 @@ func (m model) View() string {
 
 	inputView := inputStyle.Render(m.sqlTextarea.View())
 
+	filteredTables := m.getFilteredTables()
 	tableListContent := strings.Builder{}
-	for i, table := range m.tables {
+	tableListContent.WriteString(m.searchInput.View() + "\n")
+
+	for i, table := range filteredTables {
 		style := unselectedItemStyle
 		cursor := "  "
 		if m.cursor == i {
 			cursor = "> "
-			if m.focusedPane == 1 {
+			if m.focusedPane == 1 && !m.isSearching {
 				style = selectedItemStyle
 			}
 		}
@@ -1342,10 +1386,14 @@ func (m model) View() string {
 	var help strings.Builder
 	help.WriteString(keyStyle.Render("Tab"))
 	help.WriteString(descStyle.Render(" Focus Next ") + "• ")
+	help.WriteString(keyStyle.Render("/"))
+	help.WriteString(descStyle.Render(" Search ") + "• ")
+	help.WriteString(keyStyle.Render("Esc"))
+	help.WriteString(descStyle.Render(" Clear Input ") + "• ")
 	help.WriteString(keyStyle.Render("F5"))
 	help.WriteString(descStyle.Render(" Run Query ") + "• ")
-	help.WriteString(keyStyle.Render("↑/↓/←/→/k/j/h/l"))
-	help.WriteString(descStyle.Render(" Navigate/Scroll ") + "• ")
+	help.WriteString(keyStyle.Render("Nav"))
+	help.WriteString(descStyle.Render("↑/↓/←/→/k/j/h/l") + "• ")
 	help.WriteString(keyStyle.Render("Ctrl+c"))
 	help.WriteString(descStyle.Render(" Quit"))
 
@@ -1366,6 +1414,25 @@ func (m model) View() string {
 		horizontalPanes,
 		footerView,
 	))
+}
+
+func (m *model) getFilteredTables() []string {
+	query := strings.ToLower(m.searchInput.Value())
+	if query == "" {
+		return m.tables
+	}
+
+	var filtered []string
+	for _, table := range m.tables {
+		if strings.Contains(strings.ToLower(table), query) {
+			filtered = append(filtered, table)
+		}
+	}
+	return filtered
+}
+
+func (m *model) resetCursor() {
+	m.cursor = 0
 }
 
 func (m *model) executeSQLQuery(query string) {
