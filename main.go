@@ -16,21 +16,26 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 	"github.com/tliron/commonlog"
+	_ "github.com/tliron/commonlog/simple"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"github.com/tliron/glsp/server"
-	_ "modernc.org/sqlite"
-
-	tea "github.com/charmbracelet/bubbletea"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
+	_ "modernc.org/sqlite"
 )
 
 var version = "dev"
+var (
+	dbConn        *sql.DB
+	dbType        string
+	dbSchemaCache = make(map[string][]string)
+)
 
 func main() {
 	var migrate MigrateFlag
@@ -53,21 +58,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, "\nOptions:")
 		flag.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "\nExamples:")
-		fmt.Fprintln(os.Stderr, "  schema -i")
-		fmt.Fprintln(os.Stderr, `  schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"`)
-		fmt.Fprintln(os.Stderr, `  schema -create="createuser"`)
-		fmt.Fprintln(os.Stderr, "  schema -migrate")
-		fmt.Fprintln(os.Stderr, `  schema -migrate="1_createuser"`)
-		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -create="insertusers"`)
-		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -sql="0_insertusers.sql"`)
+		fmt.Fprintln(os.Stderr, "  schema -i")
+		fmt.Fprintln(os.Stderr, `  schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"`)
+		fmt.Fprintln(os.Stderr, `  schema -create="createuser"`)
+		fmt.Fprintln(os.Stderr, "  schema -migrate")
+		fmt.Fprintln(os.Stderr, `  schema -migrate="1_createuser"`)
+		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -create="insertusers"`)
+		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -sql="0_insertusers.sql"`)
 	}
 	flag.Parse()
 	if flag.NFlag() == 0 {
 		fmt.Printf(`
- ____       _                          
-/ ___|  ___| |__   ___ _ __ ___   __ _ 
-\___ \ / __| '_ \ / _ \  _   _ \ / _  |
- ___) | (__| | | |  __/ | | | | | (_| |
+ ____       _                          
+/ ___|  ___| |__   ___ _ __ ___   __ _ 
+\___ \ / __| '_ \ / _ \  _   _ \ / _  |
+ ___) | (__| | | |  __/ | | | | | (_| |
 |____/ \___|_| |_|\___|_| |_| |_|\__,_|
 `)
 		return
@@ -76,12 +81,40 @@ func main() {
 	if *lsp {
 		log.Println("Starting LSP server...")
 		commonlog.Configure(1, nil)
+
+		var err error
+		schemaPath := fmt.Sprintf("./%s/db.schema", *rdir)
+		dbConn, dbType, err = Conn2DB(schemaPath)
+		if err != nil {
+			log.Fatalf("LSP failed to connect to database: %v", err)
+		}
+		defer dbConn.Close()
+
+		log.Println("LSP: Caching database schema...")
+		tables, err := getSQLTables(dbConn, dbType)
+		if err != nil {
+			log.Fatalf("LSP failed to get tables: %v", err)
+		}
+
+		for _, table := range tables {
+			columns, err := getSQLColumns(dbConn, dbType, table)
+			if err != nil {
+				log.Printf("LSP warning: could not get columns for table %s: %v", table, err)
+				continue
+			}
+			dbSchemaCache[table] = columns
+		}
+		log.Printf("LSP: Cached %d tables.", len(dbSchemaCache))
+
 		handler = protocol.Handler{
 			Initialize:             initialize,
 			Initialized:            initialized,
 			Shutdown:               shutdown,
 			SetTrace:               setTrace,
 			TextDocumentCompletion: textDocumentCompletion,
+			TextDocumentDidOpen:    textDocumentDidOpen,
+			TextDocumentDidChange:  textDocumentDidChange,
+			TextDocumentDidSave:    textDocumentDidSave,
 		}
 
 		server := server.NewServer(&handler, lspName, false)
@@ -654,13 +687,13 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 			var sqlTable string
 			switch dbtype {
 			case "sqlite":
-				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
 			case "libsql":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
 			case "postgres":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
 			case "mysql", "mariadb":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
 			}
 			_, err = file.WriteString(sqlTable)
 			if err != nil {
@@ -964,27 +997,27 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 		}
 
 		fkRows, err := conn.Query(`
-    SELECT
-      kcu.table_name AS from_table,
-      kcu.column_name AS from_column,
-      ccu.table_name AS to_table,
-      ccu.column_name AS to_column,
-      rc.delete_rule,
-      rc.update_rule
-    FROM
-      information_schema.table_constraints AS tc
-      JOIN information_schema.key_column_usage AS kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-      JOIN information_schema.referential_constraints AS rc
-        ON tc.constraint_name = rc.constraint_name
-        AND tc.table_schema = rc.constraint_schema
-      JOIN information_schema.constraint_column_usage AS ccu
-        ON rc.unique_constraint_name = ccu.constraint_name
-        AND rc.constraint_schema = ccu.constraint_schema
-    WHERE tc.constraint_type = 'FOREIGN KEY'
-    AND tc.table_schema = 'public'
-    ORDER BY from_table, from_column;
+     SELECT
+       kcu.table_name AS from_table,
+       kcu.column_name AS from_column,
+       ccu.table_name AS to_table,
+       ccu.column_name AS to_column,
+       rc.delete_rule,
+       rc.update_rule
+     FROM
+       information_schema.table_constraints AS tc
+       JOIN information_schema.key_column_usage AS kcu
+         ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+       JOIN information_schema.referential_constraints AS rc
+         ON tc.constraint_name = rc.constraint_name
+         AND tc.table_schema = rc.constraint_schema
+       JOIN information_schema.constraint_column_usage AS ccu
+         ON rc.unique_constraint_name = ccu.constraint_name
+         AND rc.constraint_schema = ccu.constraint_schema
+     WHERE tc.constraint_type = 'FOREIGN KEY'
+     AND tc.table_schema = 'public'
+     ORDER BY from_table, from_column;
 `)
 		if err != nil {
 			return fmt.Errorf("error querying postgres foreign keys: %w", err)
@@ -1513,30 +1546,10 @@ func (m *model) loadTableData(tableName string) error {
 
 	var cols []string
 	var err error
-	var query string
-	switch m.dbType {
-	case "sqlite", "libsql":
-		query = `SELECT name FROM PRAGMA_TABLE_INFO(?);`
-	case "postgres":
-		query = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;`
-	case "mysql", "mariadb":
-		query = `SELECT column_name	FROM information_schema.columns	WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position;`
-	default:
-		return fmt.Errorf("unsupported database type for loading table data: %s", m.dbType)
-	}
 
-	rows, err := m.db.Query(query, tableName)
+	cols, err = getSQLColumns(m.db, m.dbType, tableName)
 	if err != nil {
-		return fmt.Errorf("failed to get table info for %s (%s): %w", tableName, m.dbType, err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return fmt.Errorf("failed to scan column info (%s): %w", m.dbType, err)
-		}
-		cols = append(cols, name)
+		return fmt.Errorf("failed to get table columns for %s: %w", tableName, err)
 	}
 	m.columns = cols
 
@@ -1621,4 +1634,40 @@ func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
 	}
 
 	return tables, nil
+}
+
+func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error) {
+	var cols []string
+	var query string
+
+	switch dbType {
+	case "sqlite", "libsql":
+		query = `SELECT name FROM PRAGMA_TABLE_INFO(?);`
+	case "postgres":
+		query = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;`
+	case "mysql", "mariadb":
+		query = `SELECT column_name	FROM information_schema.columns	WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position;`
+	default:
+		return nil, fmt.Errorf("unsupported database type for loading table data: %s", dbType)
+	}
+
+	rows, err := db.Query(query, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table info for %s (%s): %w", tableName, dbType, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("failed to scan column info (%s): %w", dbType, err)
+		}
+		cols = append(cols, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error on getSQLColumns (%s): %w", dbType, err)
+	}
+
+	return cols, nil
 }
