@@ -130,6 +130,7 @@ schema -studio
 `pull`: pulls database schema <br>
 `migrate`: migrates all file in migrations dir <br>
 `studio`: tui sql studio<br>
+`lsp`: connect with your editor <br>
 `migrate="[select file under migrations/]"` <br>
 `sql="[select .sql file or input the sql query directly]"` <br>
 `db="[sqlite, libsql, postgres, mysql, mariadb]"` (default sqlite) <br>
