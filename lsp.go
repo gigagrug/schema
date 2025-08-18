@@ -289,13 +289,13 @@ var SnippetMapper = map[string]CompletionSnippet{
 		Label:            "CREATE TABLE",
 		Kind:             protocol.CompletionItemKindSnippet,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
-		InsertText:       "CREATE TABLE ${1:table_name} (\n\t${2:id} INTEGER PRIMARY KEY,\n\t${3:column_name} ${4:data_type}\n)",
+		InsertText:       "CREATE TABLE IF NOT EXISTS ${1:table_name} (\n\t${2:id} ${3:data_type} PRIMARY KEY,\n\t${4:column_name} ${5:data_type}\n);",
 	},
 	"create_table_without_pk": {
 		Label:            "CREATE TABLE without PK",
 		Kind:             protocol.CompletionItemKindSnippet,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
-		InsertText:       "CREATE TABLE ${1:table_name} (\n\t${2:column_name} ${3:data_type}\n)",
+		InsertText:       "CREATE TABLE IF NOT EXISTS ${1:table_name} (\n\t${2:column_name} ${3:data_type}\n);",
 	},
 	"alter_table": {
 		Label:            "ALTER TABLE",
