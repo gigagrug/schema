@@ -58,3 +58,7 @@ schema -rdir="root-directory"
 schema -studio
 ```
 ![studio](../assets/studio.png)
+### LSP
+```shell
+schema -lsp
+```

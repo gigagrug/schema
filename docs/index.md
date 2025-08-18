@@ -24,5 +24,6 @@ features:
   - title: Insert data
   - title: Query table
   - title: SQL Studio
+  - title: LSP
 ---
 
