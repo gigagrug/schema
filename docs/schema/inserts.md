@@ -12,7 +12,7 @@ schema -create="insertdata" -dir="inserts"
 ```
 ### Step 2
 Insert based on the SQL schema above. 
-```shell
+```sql
 WITH RECURSIVE generate_users AS (
   SELECT ABS(RANDOM() % 10000) AS random_number, 1 AS row_number
   UNION ALL
