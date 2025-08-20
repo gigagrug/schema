@@ -115,6 +115,7 @@ func main() {
 			TextDocumentDidOpen:    textDocumentDidOpen,
 			TextDocumentDidChange:  textDocumentDidChange,
 			TextDocumentDidSave:    textDocumentDidSave,
+			TextDocumentFormatting: textDocumentFormatting,
 		}
 
 		server := server.NewServer(&handler, lspName, false)
