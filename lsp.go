@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, 
 		Change: ptr(protocol.TextDocumentSyncKindFull),
 		Save:   true,
 	}
+	capabilities.DocumentFormattingProvider = true
 	return protocol.InitializeResult{
 		Capabilities: capabilities,
 		ServerInfo: &protocol.InitializeResultServerInfo{
@@ -109,6 +111,115 @@ func isolateCurrentStatement(content string, offset int) string {
 		end += offset
 	}
 	return strings.TrimSpace(content[start:end])
+}
+
+func formatSql(content string) (string, error) {
+	statements := strings.Split(content, ";")
+	var formattedStatements []string
+
+	for _, stmt := range statements {
+		trimmedStmt := strings.TrimSpace(stmt)
+		if trimmedStmt == "" {
+			continue
+		}
+
+		var formatted string
+		var err error
+		if strings.HasPrefix(strings.ToUpper(trimmedStmt), "CREATE") {
+			formatted, err = formatCreateTable(trimmedStmt)
+		} else if strings.HasPrefix(strings.ToUpper(trimmedStmt), "WITH") {
+			formatted = trimmedStmt
+			err = nil
+		} else {
+			formatted, err = formatQuery(trimmedStmt)
+		}
+		if err != nil {
+			formatted = trimmedStmt
+		}
+		formattedStatements = append(formattedStatements, formatted+";")
+	}
+	return strings.Join(formattedStatements, "\n\n"), nil
+}
+
+func formatQuery(content string) (string, error) {
+	reWhitespace := regexp.MustCompile(`\s+`)
+	formattedSql := reWhitespace.ReplaceAllString(content, " ")
+
+	reOperators := regexp.MustCompile(`\s*([=<>!]+)\s*`)
+	formattedSql = reOperators.ReplaceAllString(formattedSql, " $1 ")
+
+	reCommas := regexp.MustCompile(`\s*,\s*`)
+	formattedSql = reCommas.ReplaceAllString(formattedSql, ", ")
+
+	keywords := []string{
+		"FROM", "WHERE", "GROUP BY", "ORDER BY", "LIMIT",
+		"JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "FULL OUTER JOIN",
+		"UPDATE", "SET",
+		"INSERT INTO", "VALUES",
+	}
+
+	reKeywords := regexp.MustCompile(fmt.Sprintf(`(?i)\s\b(%s)\b`, strings.Join(keywords, "|")))
+	formattedSql = reKeywords.ReplaceAllString(formattedSql, "\n$1")
+	return formattedSql, nil
+}
+
+func formatCreateTable(content string) (string, error) {
+	formattedStmt := content
+	openParen := strings.Index(formattedStmt, "(")
+	closeParen := strings.LastIndex(formattedStmt, ")")
+
+	if openParen == -1 || closeParen <= openParen {
+		return formattedStmt, nil
+	}
+	tableNameDeclaration := formattedStmt[:openParen]
+	reWhitespace := regexp.MustCompile(`\s+`)
+	normalizedDeclaration := reWhitespace.ReplaceAllString(tableNameDeclaration, " ")
+	trimmedDeclaration := strings.TrimSpace(normalizedDeclaration)
+	finalTableNamePart := trimmedDeclaration + " ("
+	columnsPart := formattedStmt[openParen+1 : closeParen]
+	restOfStmt := formattedStmt[closeParen:]
+
+	columnDefs := splitOnTopLevelCommas(columnsPart)
+
+	for i, colDef := range columnDefs {
+		trimmed := strings.TrimSpace(colDef)
+		normalized := reWhitespace.ReplaceAllString(trimmed, " ")
+		columnDefs[i] = "\t" + normalized
+	}
+	formattedColumns := strings.Join(columnDefs, ",\n")
+	finalStmt := finalTableNamePart + "\n" + formattedColumns + "\n" + restOfStmt
+	return finalStmt, nil
+}
+
+func textDocumentFormatting(context *glsp.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
+	mutex.RLock()
+	content, ok := documentStore[params.TextDocument.URI]
+	mutex.RUnlock()
+
+	if !ok {
+		return nil, nil
+	}
+
+	formattedSql, err := formatSql(content)
+	if err != nil {
+		lspLog.Warningf("Could not format document with formatter: %v", err)
+		return nil, nil
+	}
+
+	lines := strings.Split(content, "\n")
+	endLine := uint32(len(lines) - 1)
+	endChar := uint32(len(lines[endLine]))
+
+	edits := []protocol.TextEdit{
+		{
+			Range: protocol.Range{
+				Start: protocol.Position{Line: 0, Character: 0},
+				End:   protocol.Position{Line: endLine, Character: endChar},
+			},
+			NewText: formattedSql,
+		},
+	}
+	return edits, nil
 }
 
 func extractTableName(statement string) []string {
