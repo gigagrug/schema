@@ -1,5 +1,5 @@
 # Schema
-A CLI tool for working with the database | SQLite, libSQL, PostgreSQL, MySQL, MariaDB
+All-in-one CLI tool for the database | SQLite, libSQL, PostgreSQL, MySQL, MariaDB
 
 ![schema](./docs/assets/schema.png)
 
