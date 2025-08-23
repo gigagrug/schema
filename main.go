@@ -305,12 +305,7 @@ func main() {
 	defer conn.Close()
 
 	if *studio {
-		tables, err := getSQLTables(conn, dbtype)
-		if err != nil {
-			log.Fatalf("Error getting SQL tables: %v", err)
-		}
-
-		p := tea.NewProgram(initialModel(conn, dbtype, tables))
+		p := tea.NewProgram(initialModel(conn, dbtype))
 		if _, err := p.Run(); err != nil {
 			log.Fatalf("Error running program: %v", err)
 		}
@@ -1244,7 +1239,12 @@ type model struct {
 	isSearching        bool
 }
 
-func initialModel(db *sql.DB, dbType string, tables []string) model {
+func initialModel(db *sql.DB, dbType string) model {
+	tables, err := getSQLTables(db, dbType)
+	if err != nil {
+		log.Fatalf("Error getting SQL tables: %v", err)
+	}
+
 	ta := textarea.New()
 	ta.Placeholder = "Input SQL query"
 	ta.Focus()
