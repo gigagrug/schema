@@ -4,7 +4,7 @@ layout: home
 
 hero:
   name: "Schema"
-  tagline: A CLI tool for working with the database
+  tagline: All-in-one CLI tool for the database
 
   actions:
     - theme: brand
