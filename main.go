@@ -31,40 +31,29 @@ import (
 )
 
 var version = "dev"
-var (
-	dbConn        *sql.DB
-	dbType        string
-	dbSchemaCache = make(map[string][]string)
-)
+var dbSchemaCache = make(map[string][]string)
+var lspActiveDbType string
 
 func main() {
 	var migrate MigrateFlag
 	flag.Var(&migrate, "migrate", "migrate database")
 	v := flag.Bool("v", false, "version")
 	i := flag.Bool("i", false, "init schema files")
-	db := flag.String("db", "sqlite", "add db: sqlite, libsql, postgres, mysql, mariadb")
-	url := flag.String("url", "./schema/dev.db", "add dburl")
 	create := flag.String("create", "", "create sql file name")
 	pull := flag.Bool("pull", false, "get database schema")
 	sql := flag.String("sql", "", "run sql commands")
-	dir := flag.String("dir", "migrations", "choose path under root-directory/")
-	rdir := flag.String("rdir", "schema", "root directory")
 	studio := flag.Bool("studio", false, "database studio")
 	lsp := flag.Bool("lsp", false, "run language server")
+	db := flag.String("db", "sqlite", "add db: sqlite, libsql, postgres, mysql, mariadb")
+	url := flag.String("url", "./schema/dev.db", "add dburl")
+	dir := flag.String("dir", "migrations", "choose path under root-directory/")
+	rdir := flag.String("rdir", "schema", "root directory")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
-		fmt.Fprintln(os.Stderr, "A CLI tool for working with the database")
+		fmt.Fprintln(os.Stderr, "All in one CLI tool for the database")
 		fmt.Fprintln(os.Stderr, "\nOptions:")
 		flag.PrintDefaults()
-		fmt.Fprintln(os.Stderr, "\nExamples:")
-		fmt.Fprintln(os.Stderr, "  schema -i")
-		fmt.Fprintln(os.Stderr, `  schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"`)
-		fmt.Fprintln(os.Stderr, `  schema -create="createuser"`)
-		fmt.Fprintln(os.Stderr, "  schema -migrate")
-		fmt.Fprintln(os.Stderr, `  schema -migrate="1_createuser"`)
-		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -create="insertusers"`)
-		fmt.Fprintln(os.Stderr, `  schema -dir="functions" -sql="0_insertusers.sql"`)
 	}
 	flag.Parse()
 	if flag.NFlag() == 0 {
@@ -75,51 +64,6 @@ func main() {
  ___) | (__| | | |  __/ | | | | | (_| |
 |____/ \___|_| |_|\___|_| |_| |_|\__,_|
 `)
-		return
-	}
-
-	if *lsp {
-		log.Println("Starting LSP server...")
-		commonlog.Configure(1, nil)
-
-		var err error
-		schemaPath := fmt.Sprintf("./%s/db.schema", *rdir)
-		dbConn, dbType, err = Conn2DB(schemaPath)
-		if err != nil {
-			log.Fatalf("LSP failed to connect to database: %v", err)
-		}
-		defer dbConn.Close()
-
-		log.Println("LSP: Caching database schema...")
-		tables, err := getSQLTables(dbConn, dbType)
-		if err != nil {
-			log.Fatalf("LSP failed to get tables: %v", err)
-		}
-
-		for _, table := range tables {
-			columns, err := getSQLColumns(dbConn, dbType, table)
-			if err != nil {
-				log.Printf("LSP warning: could not get columns for table %s: %v", table, err)
-				continue
-			}
-			dbSchemaCache[table] = columns
-		}
-		log.Printf("LSP: Cached %d tables.", len(dbSchemaCache))
-
-		handler = protocol.Handler{
-			Initialize:             initialize,
-			Initialized:            initialized,
-			Shutdown:               shutdown,
-			SetTrace:               setTrace,
-			TextDocumentCompletion: textDocumentCompletion,
-			TextDocumentDidOpen:    textDocumentDidOpen,
-			TextDocumentDidChange:  textDocumentDidChange,
-			TextDocumentDidSave:    textDocumentDidSave,
-			TextDocumentFormatting: textDocumentFormatting,
-		}
-
-		server := server.NewServer(&handler, lspName, false)
-		server.RunStdio()
 		return
 	}
 
@@ -211,6 +155,50 @@ func main() {
 		return
 	}
 
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("SQL Flag: Error connecting to database: %v\n", err)
+	}
+	defer conn.Close()
+
+	if *lsp {
+		log.Println("Starting LSP server...")
+		commonlog.Configure(1, nil)
+		lspActiveDbType = dbtype
+
+		log.Println("LSP: Caching database schema...")
+		tables, err := getSQLTables(conn, dbtype)
+		if err != nil {
+			log.Fatalf("LSP failed to get tables: %v", err)
+		}
+
+		for _, table := range tables {
+			columns, err := getSQLColumns(conn, dbtype, table)
+			if err != nil {
+				log.Printf("LSP warning: could not get columns for table %s: %v", table, err)
+				continue
+			}
+			dbSchemaCache[table] = columns
+		}
+		log.Printf("LSP: Cached %d tables.", len(dbSchemaCache))
+
+		handler = protocol.Handler{
+			Initialize:             initialize,
+			Initialized:            initialized,
+			Shutdown:               shutdown,
+			SetTrace:               setTrace,
+			TextDocumentCompletion: textDocumentCompletion,
+			TextDocumentDidOpen:    textDocumentDidOpen,
+			TextDocumentDidChange:  textDocumentDidChange,
+			TextDocumentDidSave:    textDocumentDidSave,
+			TextDocumentFormatting: textDocumentFormatting,
+		}
+
+		server := server.NewServer(&handler, lspName, false)
+		server.RunStdio()
+		return
+	}
+
 	if flagUsed("url") {
 		upperRdir := strings.ToUpper(*rdir)
 		if _, err := os.Stat("./.env"); os.IsNotExist(err) {
@@ -297,12 +285,6 @@ func main() {
 		}
 		return
 	}
-
-	conn, dbtype, err := Conn2DB(schemaPath)
-	if err != nil {
-		log.Fatalf("SQL Flag: Error connecting to database: %v\n", err)
-	}
-	defer conn.Close()
 
 	if *studio {
 		p := tea.NewProgram(initialModel(conn, dbtype))
@@ -1554,7 +1536,7 @@ func (m *model) loadTableData(tableName string) error {
 	}
 	m.columns = cols
 
-	dataRows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 25;", tableName))
+	dataRows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName))
 	if err != nil {
 		return fmt.Errorf("failed to query data for %s: %w", tableName, err)
 	}

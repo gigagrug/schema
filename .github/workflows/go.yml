@@ -31,7 +31,7 @@ jobs:
           ext=""
           if [ "${{ matrix.goos }}" == "windows" ]; then ext=".exe"; fi
           output_name=schema-${{ matrix.goos }}-${{ matrix.goarch }}$ext
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -ldflags "-X main.version=${{ inputs.version }}" -o dist/$output_name .
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${{ inputs.version }}" -o dist/$output_name .
         shell: bash
 
       - name: Upload binary

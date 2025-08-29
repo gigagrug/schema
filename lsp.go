@@ -24,7 +24,7 @@ var (
 func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
 	capabilities := handler.CreateServerCapabilities()
 	capabilities.CompletionProvider = &protocol.CompletionOptions{
-		TriggerCharacters: []string{",", "."},
+		TriggerCharacters: []string{",", ".", " "},
 	}
 	capabilities.TextDocumentSync = protocol.TextDocumentSyncOptions{
 		Change: ptr(protocol.TextDocumentSyncKindFull),
@@ -154,8 +154,7 @@ func formatQuery(content string) (string, error) {
 	keywords := []string{
 		"FROM", "WHERE", "GROUP BY", "ORDER BY", "LIMIT",
 		"JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "FULL OUTER JOIN",
-		"UPDATE", "SET",
-		"INSERT INTO", "VALUES",
+		"UPDATE", "SET", "INSERT INTO", "VALUES",
 	}
 
 	reKeywords := regexp.MustCompile(fmt.Sprintf(`(?i)\s\b(%s)\b`, strings.Join(keywords, "|")))
@@ -231,6 +230,8 @@ func extractTableName(statement string) []string {
 		re = regexp.MustCompile(`UPDATE\s+([^\s]+)`)
 	} else if strings.HasPrefix(statement, "INSERT INTO") {
 		re = regexp.MustCompile(`INSERT\s+INTO\s+([^\s(]+)`)
+	} else if strings.HasPrefix(statement, "ALTER TABLE") {
+		re = regexp.MustCompile(`ALTER\s+TABLE\s+([^\s]+)`)
 	} else {
 		return nil
 	}
@@ -247,6 +248,55 @@ func isTableCompletionContext(text string) bool {
 	return tableContextRegex.MatchString(text)
 }
 
+func isDataTypeCompletionContext(textBeforeCursor string) bool {
+	upperText := strings.ToUpper(textBeforeCursor)
+	if !strings.Contains(upperText, "CREATE TABLE") {
+		return false
+	}
+
+	lastOpenParen := strings.LastIndex(textBeforeCursor, "(")
+	if lastOpenParen == -1 {
+		return false
+	}
+
+	lastCloseParen := strings.LastIndex(textBeforeCursor, ")")
+	if lastCloseParen > lastOpenParen {
+		return false
+	}
+
+	contentInParen := textBeforeCursor[lastOpenParen+1:]
+
+	parts := strings.Split(contentInParen, ",")
+	lastPart := strings.TrimSpace(parts[len(parts)-1])
+
+	fields := strings.Fields(lastPart)
+	return len(fields) == 2
+}
+
+func isConstraintCompletionContext(textBeforeCursor string) bool {
+	upperText := strings.ToUpper(textBeforeCursor)
+	if !strings.Contains(upperText, "CREATE TABLE") {
+		return false
+	}
+
+	lastOpenParen := strings.LastIndex(textBeforeCursor, "(")
+	if lastOpenParen == -1 {
+		return false
+	}
+
+	lastCloseParen := strings.LastIndex(textBeforeCursor, ")")
+	if lastCloseParen > lastOpenParen {
+		return false
+	}
+
+	contentInParen := textBeforeCursor[lastOpenParen+1:]
+	parts := strings.Split(contentInParen, ",")
+	lastPart := strings.TrimSpace(parts[len(parts)-1])
+	fields := strings.Fields(lastPart)
+
+	return len(fields) >= 3
+}
+
 func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionParams) (any, error) {
 	mutex.RLock()
 	content, ok := documentStore[params.TextDocument.URI]
@@ -257,6 +307,25 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 
 	offset := toOffset(content, params.Position)
 	contentBeforeCursor := content[:offset]
+
+	if isDataTypeCompletionContext(contentBeforeCursor) {
+		lspLog.Infof("In CREATE TABLE data type completion context for db: %s", lspActiveDbType)
+		if types, ok := dataTypeCompletions[lspActiveDbType]; ok {
+			var items []protocol.CompletionItem
+			for _, dataType := range types {
+				items = append(items, protocol.CompletionItem{
+					Label: dataType,
+					Kind:  ptr(protocol.CompletionItemKindTypeParameter),
+				})
+			}
+			return items, nil
+		}
+	}
+
+	if isConstraintCompletionContext(contentBeforeCursor) {
+		lspLog.Info("In CREATE TABLE constraint completion context")
+		return createSnippetCompletions("primary_key", "not_null", "unique", "default", "check", "on_delete"), nil
+	}
 
 	if isTableCompletionContext(contentBeforeCursor) {
 		lspLog.Info("In table completion context, suggesting tables.")
@@ -289,16 +358,27 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 				}
 			}
 		}
+		items = append(items, createSnippetCompletions(
+			"order_by", "add_column", "drop_column", "create_fk", "on_delete",
+			"join", "left_join", "right_join", "inner_join", "full_outer_join",
+		)...)
+		items = append(items, createKeywordCompletions(
+			"where", "group_by", "limit", "on", "and", "or", "not")...)
 		if len(items) > 0 {
 			return items, nil
 		}
 	}
 
 	lspLog.Info("No specific context matched. Returning top-level completions.")
-	return createSnippetCompletions(
+	completions := createSnippetCompletions(
 		"select_from", "insert_into", "update_set", "delete_from",
-		"create_table", "alter_table", "drop_table",
-	), nil
+		"create_table", "alter_table", "drop_table", "create_table_without_pk",
+		"create_index", "create_unique_index", "create_fk", "on_delete",
+		"join", "left_join", "right_join", "inner_join", "full_outer_join",
+	)
+	completions = append(completions, createKeywordCompletions(
+		"where", "group_by", "limit", "on", "and", "or", "not")...)
+	return completions, nil
 }
 
 func toOffset(content string, position protocol.Position) int {
@@ -359,12 +439,33 @@ type CompletionKeyWord struct {
 	Kind  protocol.CompletionItemKind
 }
 
-var KeywordMapper = map[string]CompletionKeyWord{
-	"where": {
-		Label: "WHERE",
-		Kind:  protocol.CompletionItemKindKeyword,
+var dataTypeCompletions = map[string][]string{
+	"sqlite": {
+		"INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC",
+	},
+	"libsql": {
+		"INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC",
+	},
+	"postgres": {
+		"SERIAL", "BIGSERIAL", "VARCHAR", "TEXT", "INTEGER", "BIGINT", "BOOLEAN", "DATE", "TIMESTAMP", "TIMESTAMPTZ", "NUMERIC", "DECIMAL", "UUID", "JSON", "JSONB",
+	},
+	"mysql": {
+		"INT", "BIGINT", "VARCHAR", "TEXT", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP", "DECIMAL", "JSON", "BLOB", "CHAR",
+	},
+	"mariadb": {
+		"INT", "BIGINT", "VARCHAR", "TEXT", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP", "DECIMAL", "JSON", "BLOB", "CHAR",
 	},
 }
+var KeywordMapper = map[string]CompletionKeyWord{
+	"where":    {Label: "WHERE", Kind: protocol.CompletionItemKindKeyword},
+	"group_by": {Label: "GROUP BY", Kind: protocol.CompletionItemKindKeyword},
+	"limit":    {Label: "LIMIT", Kind: protocol.CompletionItemKindKeyword},
+	"on":       {Label: "ON", Kind: protocol.CompletionItemKindKeyword},
+	"and":      {Label: "AND", Kind: protocol.CompletionItemKindKeyword},
+	"or":       {Label: "OR", Kind: protocol.CompletionItemKindKeyword},
+	"not":      {Label: "NOT", Kind: protocol.CompletionItemKindKeyword},
+}
+
 var SnippetMapper = map[string]CompletionSnippet{
 	"select_from": {
 		Label:            "SELECT FROM",
@@ -438,7 +539,7 @@ var SnippetMapper = map[string]CompletionSnippet{
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
 		InsertText:       "CREATE INDEX ${1:index_name} ON ${2:table_name} (${3:column_name})",
 	},
-	"create_pk": {
+	"create_fk": {
 		Label:            "FOREIGN KEY",
 		Kind:             protocol.CompletionItemKindSnippet,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
@@ -449,5 +550,71 @@ var SnippetMapper = map[string]CompletionSnippet{
 		Kind:             protocol.CompletionItemKindSnippet,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
 		InsertText:       "CREATE UNIQUE INDEX ${1:index_name} ON ${2:table_name} (${3:column_name})",
+	},
+	"join": {
+		Label:            "JOIN",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
+	},
+	"left_join": {
+		Label:            "LEFT JOIN",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "LEFT JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
+	},
+	"right_join": {
+		Label:            "RIGHT JOIN",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "RIGHT JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
+	},
+	"inner_join": {
+		Label:            "INNER JOIN",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "INNER JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
+	},
+	"full_outer_join": {
+		Label:            "FULL OUTER JOIN",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "FULL OUTER JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
+	},
+	"primary_key": {
+		Label:            "PRIMARY KEY",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "PRIMARY KEY",
+	},
+	"not_null": {
+		Label:            "NOT NULL",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "NOT NULL",
+	},
+	"unique": {
+		Label:            "UNIQUE",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "UNIQUE",
+	},
+	"default": {
+		Label:            "DEFAULT",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "DEFAULT ${1:value}",
+	},
+	"check": {
+		Label:            "CHECK",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "CHECK (${1:value})",
+	},
+	"on_delete": {
+		Label:            "ON DELETE CASCADE",
+		Kind:             protocol.CompletionItemKindSnippet,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "ON DELETE CASCADE",
 	},
 }
