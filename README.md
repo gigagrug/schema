@@ -128,7 +128,7 @@ schema -studio
 ```shell
 schema -lsp
 ```
-![lsp](./docs/assets/lsp.mp4)
+![lsp](./docs/assets/lsp.gif)
 
 ## Flags
 `v`: prints your version and latest version <br>
