@@ -124,6 +124,12 @@ schema -studio
 ```
 ![studio](./docs/assets/studio.png)
 
+## LSP
+```shell
+schema -lsp
+```
+![lsp](./docs/assets/lsp.mp4)
+
 ## Flags
 `v`: prints your version and latest version <br>
 `i`: initializes project<br>
