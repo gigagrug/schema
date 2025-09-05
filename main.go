@@ -44,6 +44,7 @@ func main() {
 	sql := flag.String("sql", "", "run sql commands")
 	studio := flag.Bool("studio", false, "database studio")
 	lsp := flag.Bool("lsp", false, "run language server")
+	rollback := flag.String("rollback", "", "rollback")
 	db := flag.String("db", "sqlite", "add db: sqlite, libsql, postgres, mysql, mariadb")
 	url := flag.String("url", "./schema/dev.db", "add dburl")
 	dir := flag.String("dir", "migrations", "choose path under root-directory/")
@@ -445,6 +446,12 @@ func main() {
 		defer schemaFile.Close()
 
 		if *dir == "migrations" {
+			template := "\n\n----- Rollback -----\n"
+			_, err = schemaFile.WriteString(template)
+			if err != nil {
+				log.Fatalf("Error writing template to file: %v", err)
+			}
+
 			var sqlInsert string
 			switch dbtype {
 			case "postgres":
@@ -517,7 +524,10 @@ func main() {
 				log.Fatalf("Error reading SQL file: %v\n", err)
 			}
 
-			_, err = conn.Exec(string(sqlFile))
+			sqlContent := string(sqlFile)
+			migrationSQL := strings.Split(sqlContent, "----- Rollback -----")[0]
+
+			_, err = conn.Exec(migrationSQL)
 			if err != nil {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
@@ -574,7 +584,10 @@ func main() {
 					log.Fatalf("Error reading SQL file for migration %s: %v\n", entry.Name, err)
 				}
 
-				_, err = conn.Exec(string(sqlFile))
+				sqlContent := string(sqlFile)
+				migrationSQL := strings.Split(sqlContent, "----- Rollback -----")[0]
+
+				_, err = conn.Exec(migrationSQL)
 				if err != nil {
 					log.Fatalf("Error executing SQL for migration %s: %v\n", entry.Name, err)
 				}
@@ -600,6 +613,49 @@ func main() {
 				fmt.Printf("Schema successfully migrated %s\n", entry.Name)
 			}
 		}
+		return
+	}
+
+	if *rollback != "" {
+		fileP := fmt.Sprintf("./%s/migrations/%s.sql", *rdir, *rollback)
+		sqlFile, err := os.ReadFile(fileP)
+		if err != nil {
+			log.Fatalf("Error reading SQL file for rollback: %v\n", err)
+		}
+
+		sqlContent := string(sqlFile)
+		parts := strings.Split(sqlContent, "----- Rollback -----")
+
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			log.Fatalf("Error: No rollback script found in %s.sql", *rollback)
+		}
+
+		rollbackSQL := parts[1]
+		_, err = conn.Exec(rollbackSQL)
+		if err != nil {
+			log.Fatalf("Error executing rollback SQL for %s.sql: %v\n", *rollback, err)
+		}
+
+		var sqlUpdate string
+		switch dbtype {
+		case "postgres":
+			sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = $1"
+		case "sqlite", "libsql", "mysql", "mariadb":
+			sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = ?"
+		default:
+			log.Fatalf("Unsupported database type for rollback: %s", dbtype)
+		}
+		_, err = conn.Exec(sqlUpdate, *rollback+".sql")
+		if err != nil {
+			log.Fatalf("Error updating migration status after rollback for %s.sql: %v\n", *rollback, err)
+		}
+
+		err = PullDBSchema(conn, dbtype, schemaPath)
+		if err != nil {
+			log.Fatalf("Error pulling DB schema after rollback: %v\n", err)
+		}
+
+		fmt.Printf("Successfully rolled back migration %s.sql\n", *rollback)
 		return
 	}
 }
