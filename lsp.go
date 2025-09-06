@@ -114,27 +114,59 @@ func isolateCurrentStatement(content string, offset int) string {
 }
 
 func formatSql(content string) (string, error) {
-	statements := strings.Split(content, ";")
-	var formattedStatements []string
+	var statements []string
+	var currentStatement strings.Builder
+	lines := strings.SplitSeq(content, "\n")
 
+	for line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "--") {
+			if currentStatement.Len() > 0 {
+				statements = append(statements, strings.TrimSpace(currentStatement.String()))
+				currentStatement.Reset()
+			}
+			statements = append(statements, line)
+		} else {
+			currentStatement.WriteString(line)
+			currentStatement.WriteString("\n")
+			if strings.HasSuffix(trimmedLine, ";") {
+				statements = append(statements, strings.TrimSpace(currentStatement.String()))
+				currentStatement.Reset()
+			}
+		}
+	}
+
+	if currentStatement.Len() > 0 {
+		statements = append(statements, strings.TrimSpace(currentStatement.String()))
+	}
+
+	var formattedStatements []string
 	for _, stmt := range statements {
 		trimmedStmt := strings.TrimSpace(stmt)
 		if trimmedStmt == "" {
 			continue
 		}
 
+		if strings.HasPrefix(trimmedStmt, "--") {
+			formattedStatements = append(formattedStatements, stmt)
+			continue
+		}
+
+		stmtToFormat := strings.TrimRight(trimmedStmt, ";")
+		stmtToFormat = strings.TrimSpace(stmtToFormat)
+
 		var formatted string
 		var err error
-		if strings.HasPrefix(strings.ToUpper(trimmedStmt), "CREATE") {
-			formatted, err = formatCreateTable(trimmedStmt)
-		} else if strings.HasPrefix(strings.ToUpper(trimmedStmt), "WITH") {
-			formatted = trimmedStmt
+		if strings.HasPrefix(strings.ToUpper(stmtToFormat), "CREATE") {
+			formatted, err = formatCreateTable(stmtToFormat)
+		} else if strings.HasPrefix(strings.ToUpper(stmtToFormat), "WITH") {
+			formatted = stmtToFormat
 			err = nil
 		} else {
-			formatted, err = formatQuery(trimmedStmt)
+			formatted, err = formatQuery(stmtToFormat)
 		}
 		if err != nil {
-			formatted = trimmedStmt
+			formatted = stmtToFormat
 		}
 		formattedStatements = append(formattedStatements, formatted+";")
 	}
