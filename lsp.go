@@ -342,21 +342,18 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 
 	if isDataTypeCompletionContext(contentBeforeCursor) {
 		lspLog.Infof("In CREATE TABLE data type completion context for db: %s", lspActiveDbType)
-		if types, ok := dataTypeCompletions[lspActiveDbType]; ok {
-			var items []protocol.CompletionItem
-			for _, dataType := range types {
-				items = append(items, protocol.CompletionItem{
-					Label: dataType,
-					Kind:  ptr(protocol.CompletionItemKindTypeParameter),
-				})
-			}
-			return items, nil
+		if dbDataTypes, ok := dataTypeCmp[lspActiveDbType]; ok {
+			return createCompletions(dbDataTypes...), nil
 		}
 	}
 
 	if isConstraintCompletionContext(contentBeforeCursor) {
 		lspLog.Info("In CREATE TABLE constraint completion context")
-		return createSnippetCompletions("primary_key", "not_null", "unique", "default", "check", "on_delete"), nil
+		completions := createCompletions("primary_key", "not_null", "unique", "default", "check", "on_delete")
+		if dbConstraints, ok := constraintCmp[lspActiveDbType]; ok {
+			completions = append(completions, createCompletions(dbConstraints...)...)
+		}
+		return completions, nil
 	}
 
 	if isTableCompletionContext(contentBeforeCursor) {
@@ -390,11 +387,11 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 				}
 			}
 		}
-		items = append(items, createSnippetCompletions(
+		items = append(items, createCompletions(
 			"order_by", "add_column", "drop_column", "create_fk", "on_delete",
 			"join", "left_join", "right_join", "inner_join", "full_outer_join",
 		)...)
-		items = append(items, createKeywordCompletions(
+		items = append(items, createCompletions(
 			"where", "group_by", "limit", "on", "and", "or", "not")...)
 		if len(items) > 0 {
 			return items, nil
@@ -402,13 +399,13 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 	}
 
 	lspLog.Info("No specific context matched. Returning top-level completions.")
-	completions := createSnippetCompletions(
+	completions := createCompletions(
 		"select_from", "insert_into", "update_set", "delete_from",
 		"create_table", "alter_table", "drop_table", "create_table_without_pk",
 		"create_index", "create_unique_index", "create_fk", "on_delete",
 		"join", "left_join", "right_join", "inner_join", "full_outer_join",
 	)
-	completions = append(completions, createKeywordCompletions(
+	completions = append(completions, createCompletions(
 		"where", "group_by", "limit", "on", "and", "or", "not")...)
 	return completions, nil
 }
@@ -432,23 +429,10 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-func createKeywordCompletions(keys ...string) []protocol.CompletionItem {
+func createCompletions(keys ...string) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 	for _, key := range keys {
-		if keyword, ok := KeywordMapper[key]; ok {
-			items = append(items, protocol.CompletionItem{
-				Label: keyword.Label,
-				Kind:  ptr(keyword.Kind),
-			})
-		}
-	}
-	return items
-}
-
-func createSnippetCompletions(keys ...string) []protocol.CompletionItem {
-	var items []protocol.CompletionItem
-	for _, key := range keys {
-		if snippet, ok := SnippetMapper[key]; ok {
+		if snippet, ok := CompletionItems[key]; ok {
 			items = append(items, protocol.CompletionItem{
 				Label:            snippet.Label,
 				Kind:             ptr(snippet.Kind),
@@ -460,45 +444,166 @@ func createSnippetCompletions(keys ...string) []protocol.CompletionItem {
 	return items
 }
 
-type CompletionSnippet struct {
+type CompletionDetail struct {
 	Label            string
 	Kind             protocol.CompletionItemKind
 	InsertTextFormat protocol.InsertTextFormat
 	InsertText       string
 }
-type CompletionKeyWord struct {
-	Label string
-	Kind  protocol.CompletionItemKind
-}
 
-var dataTypeCompletions = map[string][]string{
+var constraintCmp = map[string][]string{
 	"sqlite": {
-		"INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC",
+		"autoincrement",
 	},
 	"libsql": {
-		"INTEGER", "TEXT", "BLOB", "REAL", "NUMERIC",
-	},
-	"postgres": {
-		"SERIAL", "BIGSERIAL", "VARCHAR", "TEXT", "INTEGER", "BIGINT", "BOOLEAN", "DATE", "TIMESTAMP", "TIMESTAMPTZ", "NUMERIC", "DECIMAL", "UUID", "JSON", "JSONB",
+		"autoincrement",
 	},
 	"mysql": {
-		"INT", "BIGINT", "VARCHAR", "TEXT", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP", "DECIMAL", "JSON", "BLOB", "CHAR",
+		"auto_increment",
 	},
 	"mariadb": {
-		"INT", "BIGINT", "VARCHAR", "TEXT", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP", "DECIMAL", "JSON", "BLOB", "CHAR",
+		"auto_increment",
 	},
 }
-var KeywordMapper = map[string]CompletionKeyWord{
-	"where":    {Label: "WHERE", Kind: protocol.CompletionItemKindKeyword},
-	"group_by": {Label: "GROUP BY", Kind: protocol.CompletionItemKindKeyword},
-	"limit":    {Label: "LIMIT", Kind: protocol.CompletionItemKindKeyword},
-	"on":       {Label: "ON", Kind: protocol.CompletionItemKindKeyword},
-	"and":      {Label: "AND", Kind: protocol.CompletionItemKindKeyword},
-	"or":       {Label: "OR", Kind: protocol.CompletionItemKindKeyword},
-	"not":      {Label: "NOT", Kind: protocol.CompletionItemKindKeyword},
+var dataTypeCmp = map[string][]string{
+	"sqlite": {
+		"dt_integer", "dt_text", "dt_blob", "dt_real", "dt_numeric",
+	},
+	"libsql": {
+		"dt_integer", "dt_text", "dt_blob", "dt_real", "dt_numeric",
+	},
+	"postgres": {
+		"dt_serial", "dt_bigserial", "dt_varchar", "dt_text", "dt_integer", "dt_bigint", "dt_boolean", "dt_date", "dt_timestamp", "dt_timestamptz", "dt_numeric", "dt_decimal", "dt_uuid", "dt_json", "dt_jsonb",
+	},
+	"mysql": {
+		"dt_int", "dt_bigint", "dt_varchar", "dt_text", "dt_boolean", "dt_date", "dt_datetime", "dt_timestamp", "dt_decimal", "dt_json", "dt_blob", "dt_char",
+	},
+	"mariadb": {
+		"dt_int", "dt_bigint", "dt_varchar", "dt_text", "dt_boolean", "dt_date", "dt_datetime", "dt_timestamp", "dt_decimal", "dt_json", "dt_blob", "dt_char",
+	},
 }
 
-var SnippetMapper = map[string]CompletionSnippet{
+var CompletionItems = map[string]CompletionDetail{
+	"dt_integer": {
+		Label:            "INTEGER",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "INTEGER",
+	},
+	"dt_text": {
+		Label:            "TEXT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TEXT",
+	},
+	"dt_blob": {
+		Label:            "BLOB",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BLOB",
+	},
+	"dt_real": {
+		Label:            "REAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "REAL",
+	},
+	"dt_numeric": {
+		Label:            "NUMERIC",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "NUMERIC",
+	},
+	"dt_serial": {
+		Label:            "SERIAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "SERIAL",
+	},
+	"dt_bigserial": {
+		Label:            "BIGSERIAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BIGSERIAL",
+	},
+	"dt_varchar": {
+		Label:            "VARCHAR",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "VARCHAR",
+	},
+	"dt_bigint": {
+		Label:            "BIGINT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BIGINT",
+	},
+	"dt_boolean": {
+		Label:            "BOOLEAN",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BOOLEAN",
+	},
+	"dt_date": {
+		Label:            "DATE",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "DATE",
+	},
+	"dt_timestamp": {
+		Label:            "TIMESTAMP",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TIMESTAMP",
+	},
+	"dt_timestamptz": {
+		Label:            "TIMESTAMPTZ",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TIMESTAMPTZ",
+	},
+	"dt_decimal": {
+		Label:            "DECIMAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "DECIMAL",
+	},
+	"dt_uuid": {
+		Label:            "UUID",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "UUID",
+	},
+	"dt_json": {
+		Label:            "JSON",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "JSON",
+	},
+	"dt_jsonb": {
+		Label:            "JSONB",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "JSONB",
+	},
+	"dt_int": {
+		Label:            "INT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "INT",
+	},
+	"dt_datetime": {
+		Label:            "DATETIME",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "DATETIME",
+	},
+	"dt_char": {
+		Label:            "CHAR",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "CHAR",
+	},
 	"select_from": {
 		Label:            "SELECT FROM",
 		Kind:             protocol.CompletionItemKindSnippet,
@@ -613,6 +718,18 @@ var SnippetMapper = map[string]CompletionSnippet{
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
 		InsertText:       "FULL OUTER JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
 	},
+	"autoincrement": {
+		Label:            "AUTOINCREMENT",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "AUTOINCREMENT",
+	},
+	"auto_increment": {
+		Label:            "AUTO_INCREMENT",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "AUTO_INCREMENT",
+	},
 	"primary_key": {
 		Label:            "PRIMARY KEY",
 		Kind:             protocol.CompletionItemKindKeyword,
@@ -648,5 +765,47 @@ var SnippetMapper = map[string]CompletionSnippet{
 		Kind:             protocol.CompletionItemKindSnippet,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
 		InsertText:       "ON DELETE CASCADE",
+	},
+	"where": {
+		Label:            "WHERE",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "WHERE",
+	},
+	"group_by": {
+		Label:            "GROUP BY",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "GROUP BY",
+	},
+	"limit": {
+		Label:            "LIMIT",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "LIMIT",
+	},
+	"on": {
+		Label:            "ON",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "ON",
+	},
+	"and": {
+		Label:            "AND",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "AND",
+	},
+	"or": {
+		Label:            "OR",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "OR",
+	},
+	"not": {
+		Label:            "NOT",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "NOT",
 	},
 }
