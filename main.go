@@ -446,7 +446,7 @@ func main() {
 		defer schemaFile.Close()
 
 		if *dir == "migrations" {
-			template := "\n\n----- Rollback -----\n"
+			template := "\n\n-- schema rollback\n"
 			_, err = schemaFile.WriteString(template)
 			if err != nil {
 				log.Fatalf("Error writing template to file: %v", err)
@@ -525,7 +525,7 @@ func main() {
 			}
 
 			sqlContent := string(sqlFile)
-			migrationSQL := strings.Split(sqlContent, "----- Rollback -----")[0]
+			migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
 
 			_, err = conn.Exec(migrationSQL)
 			if err != nil {
@@ -585,7 +585,7 @@ func main() {
 				}
 
 				sqlContent := string(sqlFile)
-				migrationSQL := strings.Split(sqlContent, "----- Rollback -----")[0]
+				migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
 
 				_, err = conn.Exec(migrationSQL)
 				if err != nil {
@@ -624,7 +624,7 @@ func main() {
 		}
 
 		sqlContent := string(sqlFile)
-		parts := strings.Split(sqlContent, "----- Rollback -----")
+		parts := strings.Split(sqlContent, "-- schema rollback")
 
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			log.Fatalf("Error: No rollback script found in %s.sql", *rollback)
