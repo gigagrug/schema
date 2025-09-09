@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -37,14 +38,16 @@ var lspActiveDbType string
 func main() {
 	var migrate MigrateFlag
 	flag.Var(&migrate, "migrate", "migrate database")
+	var rollback RollbackFlag
+	flag.Var(&rollback, "rollback", "rollback last file or a specific file")
 	v := flag.Bool("v", false, "version")
 	i := flag.Bool("i", false, "init schema files")
 	create := flag.String("create", "", "create sql file name")
 	pull := flag.Bool("pull", false, "get database schema")
-	sql := flag.String("sql", "", "run sql commands")
+	sqlFlag := flag.String("sql", "", "run sql commands")
 	studio := flag.Bool("studio", false, "database studio")
 	lsp := flag.Bool("lsp", false, "run language server")
-	rollback := flag.String("rollback", "", "rollback")
+	remove := flag.String("remove", "", "remove migration file")
 	db := flag.String("db", "sqlite", "add db: sqlite, libsql, postgres, mysql, mariadb")
 	url := flag.String("url", "./schema/dev.db", "add dburl")
 	dir := flag.String("dir", "migrations", "choose path under root-directory/")
@@ -303,9 +306,9 @@ func main() {
 		return
 	}
 
-	if *sql != "" {
-		if strings.HasSuffix(strings.TrimSpace(*sql), ".sql") {
-			fileP := fmt.Sprintf("./%s/%s/%s", *rdir, *dir, *sql)
+	if *sqlFlag != "" {
+		if strings.HasSuffix(strings.TrimSpace(*sqlFlag), ".sql") {
+			fileP := fmt.Sprintf("./%s/%s/%s", *rdir, *dir, *sqlFlag)
 			sqlFile, err := os.ReadFile(fileP)
 			if err != nil {
 				log.Fatalf("Error reading SQL file: %v\n", err)
@@ -357,8 +360,8 @@ func main() {
 				log.Fatalf("Error pulling DB schema after migration: %v\n", err)
 			}
 			return
-		} else if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(*sql)), "SELECT") {
-			rows, err := conn.Query(*sql)
+		} else if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(*sqlFlag)), "SELECT") {
+			rows, err := conn.Query(*sqlFlag)
 			if err != nil {
 				log.Fatalf("Error executing SQL query: %v\n", err)
 			}
@@ -401,7 +404,7 @@ func main() {
 			}
 			fmt.Println(printTable(columns, data))
 		} else {
-			result, err := conn.Exec(*sql)
+			result, err := conn.Exec(*sqlFlag)
 			if err != nil {
 				log.Fatalf("Error executing SQL command: %v\n", err)
 			}
@@ -432,12 +435,21 @@ func main() {
 			log.Fatalf("Failed to read directory '%s': %v", dirPath, err)
 		}
 
-		fileCount := 0
+		maxPrefix := -1
 		for _, entry := range entries {
 			if !entry.IsDir() {
-				fileCount++
+				name := entry.Name()
+				parts := strings.SplitN(name, "_", 2)
+				if len(parts) > 0 {
+					prefix, err := strconv.Atoi(parts[0])
+					if err == nil && prefix > maxPrefix {
+						maxPrefix = prefix
+					}
+				}
 			}
 		}
+		fileCount := maxPrefix + 1
+
 		fileName := fmt.Sprintf("%d_%s.sql", fileCount, *create)
 		schemaFile, err := os.Create(dirPath + fileName)
 		if err != nil {
@@ -446,7 +458,7 @@ func main() {
 		defer schemaFile.Close()
 
 		if *dir == "migrations" {
-			template := "\n\n-- schema rollback\n"
+			template := "\n\n-- schema rollback\n\n"
 			_, err = schemaFile.WriteString(template)
 			if err != nil {
 				log.Fatalf("Error writing template to file: %v", err)
@@ -467,6 +479,63 @@ func main() {
 			}
 		}
 		fmt.Printf("Schema successfully created sql file %s\n", fileName)
+		return
+	}
+
+	if *remove != "" {
+		migrationFileName := *remove
+		if !strings.HasSuffix(migrationFileName, ".sql") {
+			migrationFileName += ".sql"
+		}
+
+		var migrated bool
+		var query string
+		switch dbtype {
+		case "postgres":
+			query = "SELECT migrated FROM _schema_migrations WHERE file = $1"
+		case "sqlite", "libsql", "mysql", "mariadb":
+			query = "SELECT migrated FROM _schema_migrations WHERE file = ?"
+		default:
+			log.Fatalf("Unsupported database type: %s", dbtype)
+		}
+
+		err := conn.QueryRow(query, migrationFileName).Scan(&migrated)
+
+		if err != nil && err != sql.ErrNoRows {
+			log.Fatalf("Error checking migration status for %s: %v\n", migrationFileName, err)
+		}
+
+		if err == nil && migrated {
+			log.Fatalf("Cannot remove migration file '%s' because it has already been migrated.", migrationFileName)
+		}
+
+		if err != sql.ErrNoRows {
+			var sqlDelete string
+			switch dbtype {
+			case "postgres":
+				sqlDelete = "DELETE FROM _schema_migrations WHERE file = $1"
+			case "sqlite", "libsql", "mysql", "mariadb":
+				sqlDelete = "DELETE FROM _schema_migrations WHERE file = ?"
+			default:
+				log.Fatalf("Unsupported database type: %s", dbtype)
+			}
+			_, delErr := conn.Exec(sqlDelete, migrationFileName)
+			if delErr != nil {
+				log.Fatalf("Failed to delete migration record for '%s' from database: %v\n", migrationFileName, delErr)
+			}
+		}
+
+		filePath := fmt.Sprintf("./%s/migrations/%s", *rdir, migrationFileName)
+		removeErr := os.Remove(filePath)
+		if removeErr != nil {
+			if os.IsNotExist(removeErr) {
+				fmt.Printf("Migration file '%s' not found on filesystem, but its database record was removed.\n", migrationFileName)
+			} else {
+				log.Fatalf("Error removing migration file '%s' from filesystem: %v\n", filePath, removeErr)
+			}
+		} else {
+			fmt.Printf("Successfully removed migration file '%s' and its database record.\n", migrationFileName)
+		}
 		return
 	}
 
@@ -616,8 +685,27 @@ func main() {
 		return
 	}
 
-	if *rollback != "" {
-		fileP := fmt.Sprintf("./%s/migrations/%s.sql", *rdir, *rollback)
+	if rollback.isSet {
+		var migrationToRollback string
+		var migrationFileName string
+
+		if rollback.value == "true" {
+			query := `SELECT file FROM _schema_migrations WHERE migrated = true ORDER BY id DESC LIMIT 1`
+			err := conn.QueryRow(query).Scan(&migrationFileName)
+			if err != nil {
+				if err == sql.ErrNoRows {
+					log.Println("No migrations to rollback.")
+					return
+				}
+				log.Fatalf("Error finding last migration to rollback: %v\n", err)
+			}
+			migrationToRollback = strings.TrimSuffix(migrationFileName, ".sql")
+		} else {
+			migrationToRollback = rollback.value
+			migrationFileName = migrationToRollback + ".sql"
+		}
+
+		fileP := fmt.Sprintf("./%s/%s/%s.sql", *rdir, *dir, migrationToRollback)
 		sqlFile, err := os.ReadFile(fileP)
 		if err != nil {
 			log.Fatalf("Error reading SQL file for rollback: %v\n", err)
@@ -627,27 +715,29 @@ func main() {
 		parts := strings.Split(sqlContent, "-- schema rollback")
 
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-			log.Fatalf("Error: No rollback script found in %s.sql", *rollback)
+			log.Fatalf("Error: No rollback script found in %s.sql", migrationToRollback)
 		}
 
 		rollbackSQL := parts[1]
 		_, err = conn.Exec(rollbackSQL)
 		if err != nil {
-			log.Fatalf("Error executing rollback SQL for %s.sql: %v\n", *rollback, err)
+			log.Fatalf("Error executing rollback SQL for %s.sql: %v\n", migrationToRollback, err)
 		}
 
-		var sqlUpdate string
-		switch dbtype {
-		case "postgres":
-			sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = $1"
-		case "sqlite", "libsql", "mysql", "mariadb":
-			sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = ?"
-		default:
-			log.Fatalf("Unsupported database type for rollback: %s", dbtype)
-		}
-		_, err = conn.Exec(sqlUpdate, *rollback+".sql")
-		if err != nil {
-			log.Fatalf("Error updating migration status after rollback for %s.sql: %v\n", *rollback, err)
+		if *dir == "migrations" {
+			var sqlUpdate string
+			switch dbtype {
+			case "postgres":
+				sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = $1"
+			case "sqlite", "libsql", "mysql", "mariadb":
+				sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = ?"
+			default:
+				log.Fatalf("Unsupported database type for rollback: %s", dbtype)
+			}
+			_, err = conn.Exec(sqlUpdate, migrationFileName)
+			if err != nil {
+				log.Fatalf("Error updating migration status after rollback for %s: %v\n", migrationFileName, err)
+			}
 		}
 
 		err = PullDBSchema(conn, dbtype, schemaPath)
@@ -655,7 +745,7 @@ func main() {
 			log.Fatalf("Error pulling DB schema after rollback: %v\n", err)
 		}
 
-		fmt.Printf("Successfully rolled back migration %s.sql\n", *rollback)
+		fmt.Printf("Successfully rolled back migration %s\n", migrationFileName)
 		return
 	}
 }
@@ -681,6 +771,32 @@ func (m *MigrateFlag) Set(s string) error {
 	return nil
 }
 func (m *MigrateFlag) IsBoolFlag() bool {
+	return true
+}
+
+type RollbackFlag struct {
+	isSet bool
+	value string
+}
+
+func (r *RollbackFlag) String() string {
+	if !r.isSet {
+		return ""
+	}
+	return r.value
+}
+
+func (r *RollbackFlag) Set(s string) error {
+	r.isSet = true
+	if s == "" {
+		r.value = "true"
+	} else {
+		r.value = s
+	}
+	return nil
+}
+
+func (r *RollbackFlag) IsBoolFlag() bool {
 	return true
 }
 
