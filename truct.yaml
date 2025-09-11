@@ -1,0 +1,70 @@
+depends:
+    commands:
+        - go
+
+.build-target:
+    expects:
+        -
+            name: "pkgversion"
+            optional: false
+        -
+            name: archtarget
+            optional: true
+            value: "{{os.arch}}"
+        -
+            name: ostarget
+            optional: true
+            value: "{{os.type}}"
+        -
+            name: output
+            optional: true
+            value: "debug"
+    description: 'Builds a target'
+    actions:
+        -
+            action: shell
+            env:
+                GOARCH: "{{$.archtarget}}"
+                GOOS: "{{$.ostarget}}"
+            cmdlines:
+                - go build -ldflags "-X main.version={{$.pkgversion}}" -o build/release/schema.{{$.output}} ./*.go
+
+.build-debug:
+    description: 'Builds a target for debugging'
+    actions:
+        -
+            action: shell
+            cmdlines:
+                - go build -o build/debug/schema ./*.go
+
+
+.build:
+    description: 'Builds the entire target in one command'
+    expects:
+        -
+            name: "pkgversion"
+            optional: true
+            value: "github-release"
+    actions:
+        -
+            action: mkdir
+            destination: build/debug
+        -
+            action: mkdir
+            destination: build/release
+        - build-debug
+        - build-target {{$.pkgversion}} amd64 linux linux-amd64
+        - build-target {{$.pkgversion}} 386 linux linux-i386
+        - build-target {{$.pkgversion}} arm linux linux-arm
+        - build-target {{$.pkgversion}} arm64 linux linux-arm64
+        - build-target {{$.pkgversion}} riscv64 linux linux-riscv64
+        - build-target {{$.pkgversion}} loong64 linux linux-loong64
+        - build-target {{$.pkgversion}} amd64 darwin darwin-amd64
+        - build-target {{$.pkgversion}} arm64 darwin darwin-arm64
+        - build-target {{$.pkgversion}} amd64 freebsd freebsd-amd64
+        - build-target {{$.pkgversion}} arm64 freebsd freebsd-arm64
+        - build-target {{$.pkgversion}} amd64 openbsd openbsd-amd64
+        - build-target {{$.pkgversion}} arm64 openbsd openbsd-arm64
+        - build-target {{$.pkgversion}} amd64 windows windows-amd64.exe
+        - build-target {{$.pkgversion}} 386 windows windows-i386.exe
+        - build-target {{$.pkgversion}} arm64 windows windows-arm64.exe

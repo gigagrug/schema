@@ -1,66 +1,43 @@
 name: Build & Release Schema
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        type: string
-        description: "Version (0.1.0)"
-        required: true
+    push:
+        tags:
+            - '*'
 
 jobs:
-  build:
-    name: ${{ matrix.goos }}-${{ matrix.goarch }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [windows, linux, darwin]
-        goarch: [amd64, arm64]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "stable"
-
-      - name: Build binary
-        run: |
-          mkdir -p dist
-          ext=""
-          if [ "${{ matrix.goos }}" == "windows" ]; then ext=".exe"; fi
-          output_name=schema-${{ matrix.goos }}-${{ matrix.goarch }}$ext
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${{ inputs.version }}" -o dist/$output_name .
-        shell: bash
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: schema-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
-
-  release:
-    name: Create GitHub Release
-    needs: build
+  build-release:
+    name: Building and releasing
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.version }}
-          name: ${{ inputs.version }}
-          body: |
-            Update by running:
-            ```shell
-            curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | sh -s
-            ```
-          generate_release_notes: true
-          files: dist/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        -
+            uses: actions/checkout@v4
+        -
+            name: Fetch Truct Version 1.0.9
+            run: curl -Lo truct https://github.com/neotesk/truct/releases/download/1.0.9/truct.linux-amd64
+        -
+            name: Change permissions for Truct
+            run: chmod +x truct
+        -
+            name: Build the release binaries
+            run: ./truct do build ${{ github.ref_name }}
+        -
+            name: Create Release
+            id: create_release
+            uses: actions/create-release@v1
+            env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            with:
+                tag_name: ${{ github.ref }}
+                release_name: Version ${{ github.ref }}
+                draft: false
+                prerelease: false
+        -
+            name: Upload Release Assets
+            id: upload-release-assets
+            uses: dwenegar/upload-release-assets@v1
+            env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            with:
+                release_id: ${{ steps.create_release.outputs.id }}
+                assets_path: build/release
