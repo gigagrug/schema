@@ -13,6 +13,11 @@ jobs:
         -
             uses: actions/checkout@v4
         -
+            name: Setup Go 1.25
+            uses: actions/setup-go@v5
+            with:
+                go-version: '1.25'
+        -
             name: Fetch Truct Version 1.0.9
             run: curl -Lo truct https://github.com/neotesk/truct/releases/download/1.0.9/truct.linux-amd64
         -
