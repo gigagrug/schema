@@ -21,6 +21,7 @@ features:
   - title: MySQL
   - title: MariaDB
   - title: Migrations
+  - title: Rollback
   - title: Insert data
   - title: Query table
   - title: SQL Studio

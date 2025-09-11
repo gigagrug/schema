@@ -24,7 +24,14 @@ schema -pull
 schema -migrate
 ```
 ```shell
-schema -migrate="0_file"
+schema -migrate="sql file name"
+```
+### Rollback
+```shell
+schema -rollback
+```
+```shell
+schema -rollback="sql file name"
 ```
 ### SQL
 ```shell
@@ -45,6 +52,10 @@ schema -url="db url"
 ```shell
 schema -create="sql file name"
 ```
+### Remove
+```shell
+schema -remove="sql file name"
+```
 ### Directory
 ```shell
 schema -dir="directory"
@@ -62,3 +73,4 @@ schema -studio
 ```shell
 schema -lsp
 ```
+![lsp](../assets/lsp.gif)
