@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS posts (
     content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- schema rollback
+DROP TABLE users;
+DROP TABLE posts;
 ```
 ### Step 3
 Migrates all the sql files not migrated 
@@ -66,6 +70,21 @@ schema -migrate
 Migrates specific sql file
 ```shell
 schema -migrate="1_initschema"
+```
+
+## Rollback
+Rollbacks last migrated file
+```shell
+schema -rollback
+```
+```shell
+schema -rollback="1_initschema"
+```
+
+## Remove
+Removes if file not migrated
+```shell
+schema -remove="1_initschema"
 ```
 
 ## Insert Dummy Data
@@ -137,9 +156,11 @@ schema -lsp
 `migrate`: migrates all file in migrations dir <br>
 `studio`: tui sql studio<br>
 `lsp`: connect with your editor <br>
+`rollback="[select file under migrations/]"` <br>
 `migrate="[select file under migrations/]"` <br>
 `sql="[select .sql file or input the sql query directly]"` <br>
 `create="[file name]"`: create file the number and .sql is added for you "1_filename.sql" <br>
+`remove="[file name]"`: remove unmigrated migration file in file and in db <br>
 `db="[sqlite, libsql, postgres, mysql, mariadb]"` (default sqlite) <br>
 `url="[database url]"` (default ./schema/dev.db) <br>
 `dir="[choose/create directory under schema/]"` (default migration) <br>
