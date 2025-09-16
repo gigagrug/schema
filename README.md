@@ -150,18 +150,19 @@ schema -lsp
 ![lsp](./docs/assets/lsp.gif)
 
 ## Flags
-`v`: prints your version and latest version <br>
-`i`: initializes project<br>
-`pull`: pulls database schema <br>
-`migrate`: migrates all file in migrations dir <br>
-`studio`: tui sql studio<br>
-`lsp`: connect with your editor <br>
-`rollback="[select file under migrations/]"` <br>
-`migrate="[select file under migrations/]"` <br>
-`sql="[select .sql file or input the sql query directly]"` <br>
-`create="[file name]"`: create file the number and .sql is added for you "1_filename.sql" <br>
-`remove="[file name]"`: remove unmigrated migration file in file and in db <br>
+`v`: Shows current and latest version <br>
+`i`: Initializes project<br>
+`pull`: Pulls database schema <br>
+`migrate`: Migrates pending migrations <br>
+`rollback`: Rollbacks last migration <br>
+`studio`: Launch SQL TUI Studio<br>
+`lsp`: Connect to your editor <br>
+`rollback="[filename]"` Rollback a specific migration <br>
+`migrate="[filename under migrations/]"` Run a specific migration <br>
+`sql="[filename or sql query]"` Run SQL directly or from a file <br>
+`create="[filename]"`: Create a new migration file <br>
+`remove="[filename]"`: Remove an unmigrated file from disk and db <br>
 `db="[sqlite, libsql, postgres, mysql, mariadb]"` (default sqlite) <br>
 `url="[database url]"` (default ./schema/dev.db) <br>
-`dir="[choose/create directory under schema/]"` (default migration) <br>
-`rdir="[choose/create root directory]"` (default schema)
+`dir="[dir under rdir]"` (default migration) <br>
+`rdir="[root directory]"` (default schema)
