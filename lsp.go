@@ -282,24 +282,31 @@ func isTableCompletionContext(text string) bool {
 
 func isDataTypeCompletionContext(textBeforeCursor string) bool {
 	upperText := strings.ToUpper(textBeforeCursor)
-	if !strings.Contains(upperText, "CREATE TABLE") {
+
+	createTableIndex := strings.LastIndex(upperText, "CREATE TABLE")
+	if createTableIndex == -1 {
 		return false
 	}
 
-	lastOpenParen := strings.LastIndex(textBeforeCursor, "(")
+	relevantText := textBeforeCursor[createTableIndex:]
+
+	openParens := strings.Count(relevantText, "(")
+	closeParens := strings.Count(relevantText, ")")
+	if openParens <= closeParens {
+		return false
+	}
+
+	lastOpenParen := strings.LastIndex(relevantText, "(")
 	if lastOpenParen == -1 {
 		return false
 	}
-
-	lastCloseParen := strings.LastIndex(textBeforeCursor, ")")
-	if lastCloseParen > lastOpenParen {
-		return false
-	}
-
-	contentInParen := textBeforeCursor[lastOpenParen+1:]
-
+	contentInParen := relevantText[lastOpenParen+1:]
 	parts := strings.Split(contentInParen, ",")
 	lastPart := strings.TrimSpace(parts[len(parts)-1])
+
+	if strings.Contains(lastPart, "(") {
+		return false
+	}
 
 	fields := strings.Fields(lastPart)
 	return len(fields) == 2
@@ -307,21 +314,25 @@ func isDataTypeCompletionContext(textBeforeCursor string) bool {
 
 func isConstraintCompletionContext(textBeforeCursor string) bool {
 	upperText := strings.ToUpper(textBeforeCursor)
-	if !strings.Contains(upperText, "CREATE TABLE") {
+
+	createTableIndex := strings.LastIndex(upperText, "CREATE TABLE")
+	if createTableIndex == -1 {
 		return false
 	}
 
-	lastOpenParen := strings.LastIndex(textBeforeCursor, "(")
+	relevantText := textBeforeCursor[createTableIndex:]
+
+	openParens := strings.Count(relevantText, "(")
+	closeParens := strings.Count(relevantText, ")")
+	if openParens <= closeParens {
+		return false
+	}
+
+	lastOpenParen := strings.LastIndex(relevantText, "(")
 	if lastOpenParen == -1 {
 		return false
 	}
-
-	lastCloseParen := strings.LastIndex(textBeforeCursor, ")")
-	if lastCloseParen > lastOpenParen {
-		return false
-	}
-
-	contentInParen := textBeforeCursor[lastOpenParen+1:]
+	contentInParen := relevantText[lastOpenParen+1:]
 	parts := strings.Split(contentInParen, ",")
 	lastPart := strings.TrimSpace(parts[len(parts)-1])
 	fields := strings.Fields(lastPart)
@@ -529,8 +540,8 @@ var CompletionItems = map[string]CompletionDetail{
 	"dt_varchar": {
 		Label:            "VARCHAR",
 		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "VARCHAR",
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "VARCHAR(${1:int})",
 	},
 	"dt_bigint": {
 		Label:            "BIGINT",
@@ -565,8 +576,8 @@ var CompletionItems = map[string]CompletionDetail{
 	"dt_decimal": {
 		Label:            "DECIMAL",
 		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "DECIMAL",
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "DECIMAL(${1:int},${2:int})",
 	},
 	"dt_uuid": {
 		Label:            "UUID",
