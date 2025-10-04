@@ -264,7 +264,7 @@ func formatInsert(content string) (string, error) {
 	}
 
 	valuesPart := strings.TrimSpace(content[valuesIndex+len("VALUES"):])
-	valueTuples := splitOnTopLevelCommas(valuesPart)
+	valueTuples := splitOnTopCommas(valuesPart)
 
 	for i, tuple := range valueTuples {
 		valueTuples[i] = "\t" + strings.TrimSpace(tuple)
