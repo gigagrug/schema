@@ -113,6 +113,28 @@ func isolateCurrentStatement(content string, offset int) string {
 	return strings.TrimSpace(content[start:end])
 }
 
+func splitOnTopCommas(s string) []string {
+	var result []string
+	parenLevel := 0
+	lastSplit := 0
+
+	for i, char := range s {
+		switch char {
+		case '(':
+			parenLevel++
+		case ')':
+			parenLevel--
+		case ',':
+			if parenLevel == 0 {
+				result = append(result, strings.TrimSpace(s[lastSplit:i]))
+				lastSplit = i + 1
+			}
+		}
+	}
+
+	result = append(result, strings.TrimSpace(s[lastSplit:]))
+	return result
+}
 func formatSql(content string) (string, error) {
 	var statements []string
 	var currentStatement strings.Builder
@@ -157,9 +179,12 @@ func formatSql(content string) (string, error) {
 
 		var formatted string
 		var err error
-		if strings.HasPrefix(strings.ToUpper(stmtToFormat), "CREATE") {
+		upperStmt := strings.ToUpper(stmtToFormat)
+		if strings.HasPrefix(upperStmt, "CREATE") {
 			formatted, err = formatCreateTable(stmtToFormat)
-		} else if strings.HasPrefix(strings.ToUpper(stmtToFormat), "WITH") {
+		} else if strings.HasPrefix(upperStmt, "INSERT") {
+			formatted, err = formatInsert(stmtToFormat)
+		} else if strings.HasPrefix(upperStmt, "WITH") {
 			formatted = stmtToFormat
 			err = nil
 		} else {
@@ -210,7 +235,7 @@ func formatCreateTable(content string) (string, error) {
 	columnsPart := formattedStmt[openParen+1 : closeParen]
 	restOfStmt := formattedStmt[closeParen:]
 
-	columnDefs := splitOnTopLevelCommas(columnsPart)
+	columnDefs := splitOnTopCommas(columnsPart)
 
 	for i, colDef := range columnDefs {
 		trimmed := strings.TrimSpace(colDef)
@@ -220,6 +245,33 @@ func formatCreateTable(content string) (string, error) {
 	formattedColumns := strings.Join(columnDefs, ",\n")
 	finalStmt := finalTableNamePart + "\n" + formattedColumns + "\n" + restOfStmt
 	return finalStmt, nil
+}
+
+func formatInsert(content string) (string, error) {
+	upperContent := strings.ToUpper(content)
+	valuesIndex := strings.Index(upperContent, "VALUES")
+	if valuesIndex == -1 {
+		return content, fmt.Errorf("no VALUES clause found in INSERT statement")
+	}
+
+	insertClause := strings.TrimSpace(content[:valuesIndex])
+	parenIndex := strings.Index(insertClause, "(")
+
+	if parenIndex > -1 {
+		tablePart := strings.TrimSpace(insertClause[:parenIndex])
+		columnPart := insertClause[parenIndex:]
+		insertClause = fmt.Sprintf("%s\n\t%s", tablePart, columnPart)
+	}
+
+	valuesPart := strings.TrimSpace(content[valuesIndex+len("VALUES"):])
+	valueTuples := splitOnTopLevelCommas(valuesPart)
+
+	for i, tuple := range valueTuples {
+		valueTuples[i] = "\t" + strings.TrimSpace(tuple)
+	}
+
+	formattedValues := strings.Join(valueTuples, ",\n")
+	return fmt.Sprintf("%s\nVALUES\n%s", insertClause, formattedValues), nil
 }
 
 func textDocumentFormatting(context *glsp.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
