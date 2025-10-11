@@ -1360,8 +1360,7 @@ var (
 
 	tableListPaneStyle = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder(), false, true, false, false).
-				BorderForeground(lipgloss.Color("240")).
-				Width(25)
+				BorderForeground(lipgloss.Color("240"))
 
 	tableDataPaneStyle  = lipgloss.NewStyle().PaddingLeft(1)
 	selectedItemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
@@ -1391,12 +1390,23 @@ type model struct {
 	height             int
 	searchInput        textinput.Model
 	isSearching        bool
+	maxTableNameLen    int
 }
 
 func initialModel(db *sql.DB, dbType string) model {
 	tables, err := getSQLTables(db, dbType)
 	if err != nil {
 		log.Fatalf("Error getting SQL tables: %v", err)
+	}
+
+	maxLen := 0
+	for _, t := range tables {
+		if len(t) > maxLen {
+			maxLen = len(t)
+		}
+	}
+	if maxLen == 0 {
+		maxLen = 15
 	}
 
 	ta := textarea.New()
@@ -1416,13 +1426,14 @@ func initialModel(db *sql.DB, dbType string) model {
 	ti.Prompt = " / "
 
 	return model{
-		db:          db,
-		dbType:      dbType,
-		sqlTextarea: ta,
-		viewport:    vp,
-		focusedPane: 0,
-		tables:      tables,
-		searchInput: ti,
+		db:              db,
+		dbType:          dbType,
+		sqlTextarea:     ta,
+		viewport:        vp,
+		focusedPane:     0,
+		tables:          tables,
+		searchInput:     ti,
+		maxTableNameLen: maxLen + 4,
 	}
 }
 
@@ -1444,8 +1455,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
 
 		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
-		m.searchInput.Width = tableListPaneStyle.GetWidth() - 3
-		m.viewport.Width = m.width - tableListPaneStyle.GetWidth() - tableDataPaneStyle.GetHorizontalFrameSize() - 2
+		m.searchInput.Width = m.maxTableNameLen - 3
+		m.viewport.Width = m.width - m.maxTableNameLen - tableDataPaneStyle.GetHorizontalFrameSize() - 2
 		m.viewport.Height = paneHeight
 
 	case tea.KeyMsg:
@@ -1542,11 +1553,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	listStyle := tableListPaneStyle
+	listStyle := tableListPaneStyle.Width(m.maxTableNameLen)
 	dataStyle := tableDataPaneStyle
 	switch m.focusedPane {
 	case 1:
-		listStyle = tableListPaneStyle.BorderForeground(lipgloss.Color("170"))
+		listStyle = listStyle.BorderForeground(lipgloss.Color("170"))
 	case 2:
 		dataStyle = tableDataPaneStyle.Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("170"))
 	}
