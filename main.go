@@ -1445,7 +1445,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
 		m.searchInput.Width = tableListPaneStyle.GetWidth() - 3
-		m.viewport.Width = m.width - tableListPaneStyle.GetWidth() - appStyle.GetHorizontalPadding() - appStyle.GetHorizontalFrameSize() - tableDataPaneStyle.GetHorizontalPadding() - tableListPaneStyle.GetHorizontalFrameSize()
+		m.viewport.Width = m.width - tableListPaneStyle.GetWidth() - tableDataPaneStyle.GetHorizontalFrameSize() - 2
 		m.viewport.Height = paneHeight
 
 	case tea.KeyMsg:
