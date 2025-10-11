@@ -1529,10 +1529,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.focusedPane == 0 {
+	switch m.focusedPane {
+	case 0:
 		m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
 		cmds = append(cmds, cmd)
-	} else {
+	case 2:
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	}
