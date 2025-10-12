@@ -1465,7 +1465,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = m.width - m.maxTableNameLen - tableDataPaneStyle.GetHorizontalFrameSize() - 2
 		m.viewport.Height = paneHeight
 		m.tableListViewport.Width = m.maxTableNameLen
-		m.tableListViewport.Height = paneHeight
+		m.tableListViewport.Height = paneHeight - 1
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1537,15 +1537,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up", "k":
 				if m.cursor > 0 {
 					m.cursor--
-					if m.cursor < m.tableListViewport.YOffset+1 {
-						m.tableListViewport.ScrollUp(1)
+					if m.cursor < m.tableListViewport.YOffset {
+						m.tableListViewport.YOffset = m.cursor
 					}
 				}
 			case "down", "j":
 				if m.cursor < len(filteredTables)-1 {
 					m.cursor++
-					if m.cursor >= m.tableListViewport.YOffset+m.tableListViewport.Height-1 {
-						m.tableListViewport.ScrollDown(1)
+					lastVisibleLine := m.tableListViewport.YOffset + m.tableListViewport.Height - 1
+					if m.cursor > lastVisibleLine {
+						m.tableListViewport.YOffset = m.cursor - m.tableListViewport.Height + 1
 					}
 				}
 			}
@@ -1583,8 +1584,6 @@ func (m model) View() string {
 
 	filteredTables := m.getFilteredTables()
 	tableListContent := strings.Builder{}
-	tableListContent.WriteString(m.searchInput.View() + "\n")
-
 	for i, table := range filteredTables {
 		style := unselectedItemStyle
 		cursor := "  "
@@ -1602,6 +1601,11 @@ func (m model) View() string {
 
 	m.tableListViewport.SetContent(tableListContent.String())
 
+	leftPaneContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.searchInput.View(),
+		m.tableListViewport.View(),
+	)
+
 	var help strings.Builder
 	help.WriteString(keyStyle.Render("Tab"))
 	help.WriteString(descStyle.Render(" Focus Next ") + "• ")
@@ -1618,7 +1622,7 @@ func (m model) View() string {
 
 	footerView := footerStyle.Render(help.String())
 
-	finalTableListContent := listStyle.Width(m.maxTableNameLen).Render(m.tableListViewport.View())
+	finalTableListContent := listStyle.Width(m.maxTableNameLen).Render(leftPaneContent)
 	finalTableDataContent := dataStyle.Render(m.viewport.View())
 
 	horizontalPanes := lipgloss.JoinHorizontal(
@@ -1652,6 +1656,7 @@ func (m *model) getFilteredTables() []string {
 
 func (m *model) resetCursor() {
 	m.cursor = 0
+	m.tableListViewport.GotoTop()
 }
 
 func (m *model) executeSQLQuery(query string) {
