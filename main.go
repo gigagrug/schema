@@ -1360,8 +1360,7 @@ var (
 
 	tableListPaneStyle = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder(), false, true, false, false).
-				BorderForeground(lipgloss.Color("240")).
-				Width(25)
+				BorderForeground(lipgloss.Color("240"))
 
 	tableDataPaneStyle  = lipgloss.NewStyle().PaddingLeft(1)
 	selectedItemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
@@ -1377,6 +1376,7 @@ type model struct {
 	dbType             string
 	sqlTextarea        textarea.Model
 	viewport           viewport.Model
+	tableListViewport  viewport.Model
 	focusedPane        int
 	tables             []string
 	cursor             int
@@ -1391,6 +1391,7 @@ type model struct {
 	height             int
 	searchInput        textinput.Model
 	isSearching        bool
+	maxTableNameLen    int
 }
 
 func initialModel(db *sql.DB, dbType string) model {
@@ -1398,6 +1399,17 @@ func initialModel(db *sql.DB, dbType string) model {
 	if err != nil {
 		log.Fatalf("Error getting SQL tables: %v", err)
 	}
+
+	maxLen := 0
+	for _, t := range tables {
+		if len(t) > maxLen {
+			maxLen = len(t)
+		}
+	}
+	if maxLen == 0 {
+		maxLen = 15
+	}
+	maxLen += 4
 
 	ta := textarea.New()
 	ta.Placeholder = "Input SQL query"
@@ -1409,6 +1421,8 @@ func initialModel(db *sql.DB, dbType string) model {
 	vp := viewport.New(80, 20)
 	vp.SetContent("Select a table to view its data or run a query.")
 
+	vpTables := viewport.New(maxLen, 20)
+
 	ti := textinput.New()
 	ti.Placeholder = "Search tables..."
 	ti.CharLimit = 50
@@ -1416,13 +1430,15 @@ func initialModel(db *sql.DB, dbType string) model {
 	ti.Prompt = " / "
 
 	return model{
-		db:          db,
-		dbType:      dbType,
-		sqlTextarea: ta,
-		viewport:    vp,
-		focusedPane: 0,
-		tables:      tables,
-		searchInput: ti,
+		db:                db,
+		dbType:            dbType,
+		sqlTextarea:       ta,
+		viewport:          vp,
+		tableListViewport: vpTables,
+		focusedPane:       0,
+		tables:            tables,
+		searchInput:       ti,
+		maxTableNameLen:   maxLen,
 	}
 }
 
@@ -1444,9 +1460,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
 
 		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
-		m.searchInput.Width = tableListPaneStyle.GetWidth() - 3
-		m.viewport.Width = m.width - tableListPaneStyle.GetWidth() - appStyle.GetHorizontalPadding() - appStyle.GetHorizontalFrameSize() - tableDataPaneStyle.GetHorizontalPadding() - tableListPaneStyle.GetHorizontalFrameSize()
+		m.searchInput.Width = m.maxTableNameLen - 3
+
+		m.viewport.Width = m.width - m.maxTableNameLen - tableDataPaneStyle.GetHorizontalFrameSize() - 2
 		m.viewport.Height = paneHeight
+		m.tableListViewport.Width = m.maxTableNameLen
+		m.tableListViewport.Height = paneHeight - 1
+		return m, nil
 
 	case tea.KeyMsg:
 		filteredTables := m.getFilteredTables()
@@ -1487,7 +1507,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sqlTextarea.Blur()
 			}
 			return m, nil
-
 		case "f5":
 			if m.focusedPane == 0 {
 				query := m.sqlTextarea.Value()
@@ -1495,9 +1514,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.executeSQLQuery(query)
 				}
 			}
+			return m, nil
 		}
 
 		switch m.focusedPane {
+		case 0:
+			m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
+			cmds = append(cmds, cmd)
+
 		case 1:
 			switch msg.String() {
 			case "/":
@@ -1513,10 +1537,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up", "k":
 				if m.cursor > 0 {
 					m.cursor--
+					if m.cursor < m.tableListViewport.YOffset {
+						m.tableListViewport.YOffset = m.cursor
+					}
 				}
 			case "down", "j":
 				if m.cursor < len(filteredTables)-1 {
 					m.cursor++
+					lastVisibleLine := m.tableListViewport.YOffset + m.tableListViewport.Height - 1
+					if m.cursor > lastVisibleLine {
+						m.tableListViewport.YOffset = m.cursor - m.tableListViewport.Height + 1
+					}
 				}
 			}
 		case 2:
@@ -1525,37 +1556,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.ScrollLeft(10)
 			case "right", "l":
 				m.viewport.ScrollRight(10)
+			default:
+				m.viewport, cmd = m.viewport.Update(msg)
+				cmds = append(cmds, cmd)
 			}
 		}
-	}
-
-	if m.focusedPane == 0 {
-		m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
-		cmds = append(cmds, cmd)
-	} else {
-		m.viewport, cmd = m.viewport.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
 func (m model) View() string {
-	listStyle := tableListPaneStyle
+	var listStyle lipgloss.Style
 	dataStyle := tableDataPaneStyle
+
 	switch m.focusedPane {
 	case 1:
 		listStyle = tableListPaneStyle.BorderForeground(lipgloss.Color("170"))
 	case 2:
+		listStyle = tableListPaneStyle
 		dataStyle = tableDataPaneStyle.Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color("170"))
+	default:
+		listStyle = tableListPaneStyle
 	}
 
 	inputView := inputStyle.Render(m.sqlTextarea.View())
 
 	filteredTables := m.getFilteredTables()
 	tableListContent := strings.Builder{}
-	tableListContent.WriteString(m.searchInput.View() + "\n")
-
 	for i, table := range filteredTables {
 		style := unselectedItemStyle
 		cursor := "  "
@@ -1570,6 +1598,13 @@ func (m model) View() string {
 		}
 		tableListContent.WriteString(style.Render(fmt.Sprintf("%s%s", cursor, table)) + "\n")
 	}
+
+	m.tableListViewport.SetContent(tableListContent.String())
+
+	leftPaneContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.searchInput.View(),
+		m.tableListViewport.View(),
+	)
 
 	var help strings.Builder
 	help.WriteString(keyStyle.Render("Tab"))
@@ -1587,7 +1622,7 @@ func (m model) View() string {
 
 	footerView := footerStyle.Render(help.String())
 
-	finalTableListContent := listStyle.Render(tableListContent.String())
+	finalTableListContent := listStyle.Width(m.maxTableNameLen).Render(leftPaneContent)
 	finalTableDataContent := dataStyle.Render(m.viewport.View())
 
 	horizontalPanes := lipgloss.JoinHorizontal(
@@ -1621,6 +1656,7 @@ func (m *model) getFilteredTables() []string {
 
 func (m *model) resetCursor() {
 	m.cursor = 0
+	m.tableListViewport.GotoTop()
 }
 
 func (m *model) executeSQLQuery(query string) {

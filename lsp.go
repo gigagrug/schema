@@ -113,6 +113,28 @@ func isolateCurrentStatement(content string, offset int) string {
 	return strings.TrimSpace(content[start:end])
 }
 
+func splitOnTopCommas(s string) []string {
+	var result []string
+	parenLevel := 0
+	lastSplit := 0
+
+	for i, char := range s {
+		switch char {
+		case '(':
+			parenLevel++
+		case ')':
+			parenLevel--
+		case ',':
+			if parenLevel == 0 {
+				result = append(result, strings.TrimSpace(s[lastSplit:i]))
+				lastSplit = i + 1
+			}
+		}
+	}
+
+	result = append(result, strings.TrimSpace(s[lastSplit:]))
+	return result
+}
 func formatSql(content string) (string, error) {
 	var statements []string
 	var currentStatement strings.Builder
@@ -157,9 +179,12 @@ func formatSql(content string) (string, error) {
 
 		var formatted string
 		var err error
-		if strings.HasPrefix(strings.ToUpper(stmtToFormat), "CREATE") {
+		upperStmt := strings.ToUpper(stmtToFormat)
+		if strings.HasPrefix(upperStmt, "CREATE") {
 			formatted, err = formatCreateTable(stmtToFormat)
-		} else if strings.HasPrefix(strings.ToUpper(stmtToFormat), "WITH") {
+		} else if strings.HasPrefix(upperStmt, "INSERT") {
+			formatted, err = formatInsert(stmtToFormat)
+		} else if strings.HasPrefix(upperStmt, "WITH") {
 			formatted = stmtToFormat
 			err = nil
 		} else {
@@ -210,7 +235,7 @@ func formatCreateTable(content string) (string, error) {
 	columnsPart := formattedStmt[openParen+1 : closeParen]
 	restOfStmt := formattedStmt[closeParen:]
 
-	columnDefs := splitOnTopLevelCommas(columnsPart)
+	columnDefs := splitOnTopCommas(columnsPart)
 
 	for i, colDef := range columnDefs {
 		trimmed := strings.TrimSpace(colDef)
@@ -220,6 +245,33 @@ func formatCreateTable(content string) (string, error) {
 	formattedColumns := strings.Join(columnDefs, ",\n")
 	finalStmt := finalTableNamePart + "\n" + formattedColumns + "\n" + restOfStmt
 	return finalStmt, nil
+}
+
+func formatInsert(content string) (string, error) {
+	upperContent := strings.ToUpper(content)
+	valuesIndex := strings.Index(upperContent, "VALUES")
+	if valuesIndex == -1 {
+		return content, fmt.Errorf("no VALUES clause found in INSERT statement")
+	}
+
+	insertClause := strings.TrimSpace(content[:valuesIndex])
+	parenIndex := strings.Index(insertClause, "(")
+
+	if parenIndex > -1 {
+		tablePart := strings.TrimSpace(insertClause[:parenIndex])
+		columnPart := insertClause[parenIndex:]
+		insertClause = fmt.Sprintf("%s\n\t%s", tablePart, columnPart)
+	}
+
+	valuesPart := strings.TrimSpace(content[valuesIndex+len("VALUES"):])
+	valueTuples := splitOnTopCommas(valuesPart)
+
+	for i, tuple := range valueTuples {
+		valueTuples[i] = "\t" + strings.TrimSpace(tuple)
+	}
+
+	formattedValues := strings.Join(valueTuples, ",\n")
+	return fmt.Sprintf("%s\nVALUES\n%s", insertClause, formattedValues), nil
 }
 
 func textDocumentFormatting(context *glsp.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
@@ -463,18 +515,10 @@ type CompletionDetail struct {
 }
 
 var constraintCmp = map[string][]string{
-	"sqlite": {
-		"autoincrement",
-	},
-	"libsql": {
-		"autoincrement",
-	},
-	"mysql": {
-		"auto_increment",
-	},
-	"mariadb": {
-		"auto_increment",
-	},
+	"sqlite":  {"autoincrement"},
+	"libsql":  {"autoincrement"},
+	"mysql":   {"auto_increment", "unsigned"},
+	"mariadb": {"auto_increment", "unsigned"},
 }
 var dataTypeCmp = map[string][]string{
 	"sqlite": {
@@ -484,58 +528,31 @@ var dataTypeCmp = map[string][]string{
 		"dt_integer", "dt_text", "dt_blob", "dt_real", "dt_numeric",
 	},
 	"postgres": {
-		"dt_serial", "dt_bigserial", "dt_varchar", "dt_text", "dt_integer", "dt_bigint", "dt_boolean", "dt_date", "dt_timestamp", "dt_timestamptz", "dt_numeric", "dt_decimal", "dt_uuid", "dt_json", "dt_jsonb",
+		"dt_char", "dt_varchar", "dt_bytea", "dt_text", "dt_json", "dt_jsonb",
+		"dt_smallserial", "dt_serial", "dt_bigserial", "dt_bit", "dt_varbit", "dt_smallint", "dt_integer", "dt_bigint", "dt_boolean", "dt_real", "dt_double_precision", "dt_decimal", "dt_money",
+		"dt_date", "dt_timestamp", "dt_timestamptz", "dt_time", "dt_interval",
+		"dt_point", "dt_line", "dt_lseg", "dt_box", "path", "dt_polygon", "dt_circle",
+		"dt_cidr", "dt_inet", "dt_macaddr", "dt_macaddr8",
 	},
 	"mysql": {
-		"dt_int", "dt_bigint", "dt_varchar", "dt_text", "dt_boolean", "dt_date", "dt_datetime", "dt_timestamp", "dt_decimal", "dt_json", "dt_blob", "dt_char",
+		"dt_char", "dt_varchar", "dt_binary", "dt_varbinary", "dt_tinytext", "dt_text", "dt_mediumtext", "dt_longtext", "dt_tinyblob", "dt_blob", "dt_mediumblob", "dt_longblob",
+		"dt_bit", "dt_tinyint", "dt_smallint", "dt_mediumint", "dt_integer", "dt_bigint", "dt_boolean", "dt_float1", "dt_float2", "dt_double", "dt_double_precision", "dt_decimal",
+		"dt_date", "dt_datetime", "dt_timestamp", "dt_time", "dt_year",
 	},
 	"mariadb": {
-		"dt_int", "dt_bigint", "dt_varchar", "dt_text", "dt_boolean", "dt_date", "dt_datetime", "dt_timestamp", "dt_decimal", "dt_json", "dt_blob", "dt_char",
+		"dt_char", "dt_varchar", "dt_binary", "dt_varbinary", "dt_tinytext", "dt_text", "dt_mediumtext", "dt_longtext", "dt_tinyblob", "dt_blob", "dt_mediumblob", "dt_longblob",
+		"dt_bit", "dt_tinyint", "dt_smallint", "dt_mediumint", "dt_integer", "dt_bigint", "dt_boolean", "dt_float1", "dt_float2", "dt_double", "dt_double_precision", "dt_decimal",
+		"dt_date", "dt_datetime", "dt_timestamp", "dt_time", "dt_year",
 	},
 }
 
 var CompletionItems = map[string]CompletionDetail{
-	"dt_integer": {
-		Label:            "INTEGER",
+	// Strings
+	"dt_char": {
+		Label:            "CHAR",
 		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "INTEGER",
-	},
-	"dt_text": {
-		Label:            "TEXT",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "TEXT",
-	},
-	"dt_blob": {
-		Label:            "BLOB",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "BLOB",
-	},
-	"dt_real": {
-		Label:            "REAL",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "REAL",
-	},
-	"dt_numeric": {
-		Label:            "NUMERIC",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "NUMERIC",
-	},
-	"dt_serial": {
-		Label:            "SERIAL",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "SERIAL",
-	},
-	"dt_bigserial": {
-		Label:            "BIGSERIAL",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "BIGSERIAL",
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "CHAR(${1:int})",
 	},
 	"dt_varchar": {
 		Label:            "VARCHAR",
@@ -543,47 +560,71 @@ var CompletionItems = map[string]CompletionDetail{
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
 		InsertText:       "VARCHAR(${1:int})",
 	},
-	"dt_bigint": {
-		Label:            "BIGINT",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "BIGINT",
-	},
-	"dt_boolean": {
-		Label:            "BOOLEAN",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "BOOLEAN",
-	},
-	"dt_date": {
-		Label:            "DATE",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "DATE",
-	},
-	"dt_timestamp": {
-		Label:            "TIMESTAMP",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "TIMESTAMP",
-	},
-	"dt_timestamptz": {
-		Label:            "TIMESTAMPTZ",
-		Kind:             protocol.CompletionItemKindTypeParameter,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "TIMESTAMPTZ",
-	},
-	"dt_decimal": {
-		Label:            "DECIMAL",
+	"dt_binary": {
+		Label:            "BINARY",
 		Kind:             protocol.CompletionItemKindTypeParameter,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
-		InsertText:       "DECIMAL(${1:int},${2:int})",
+		InsertText:       "BINARY(${1:int})",
 	},
-	"dt_uuid": {
-		Label:            "UUID",
+	"dt_bytea": {
+		Label:            "BYTEA",
 		Kind:             protocol.CompletionItemKindTypeParameter,
 		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "UUID",
+		InsertText:       "BYTEA",
+	},
+	"dt_varbinary": {
+		Label:            "VARBINARY",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "VARBINARY(${1:int})",
+	},
+	"dt_tinytext": {
+		Label:            "TINYTEXT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TINYTEXT",
+	},
+	"dt_text": {
+		Label:            "TEXT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TEXT",
+	},
+	"dt_mediumtext": {
+		Label:            "MEDIUMTEXT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "MEDIUMTEXT",
+	},
+	"dt_longtext": {
+		Label:            "LONGTEXT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "LONGTEXT",
+	},
+	"dt_tinyblob": {
+		Label:            "TINYBLOB",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TINYBLOB",
+	},
+	"dt_blob": {
+		Label:            "BLOB",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BLOB",
+	},
+	"dt_mediumblob": {
+		Label:            "MEDIUMBLOB",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "MEDIUMBLOB",
+	},
+	"dt_longblob": {
+		Label:            "LONGBLOB",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "LONGBLOB",
 	},
 	"dt_json": {
 		Label:            "JSON",
@@ -597,11 +638,127 @@ var CompletionItems = map[string]CompletionDetail{
 		InsertTextFormat: protocol.InsertTextFormatPlainText,
 		InsertText:       "JSONB",
 	},
-	"dt_int": {
-		Label:            "INT",
+	// Numeric
+	"dt_bit": {
+		Label:            "BIT(size)",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "BIT(${1:int})",
+	},
+	"dt_varbit": {
+		Label:            "VARBIT(size)",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "VARBIT(${1:int})",
+	},
+	"dt_tinyint": {
+		Label:            "TINYINT(size)",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "TINYINT(${1:int})",
+	},
+	"dt_smallint": {
+		Label:            "SMALLINT",
 		Kind:             protocol.CompletionItemKindTypeParameter,
 		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "INT",
+		InsertText:       "SMALLINT",
+	},
+	"dt_mediumint": {
+		Label:            "MEDIUMINT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "MEDIUMINT",
+	},
+	"dt_integer": {
+		Label:            "INTEGER",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "INTEGER",
+	},
+	"dt_bigint": {
+		Label:            "BIGINT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BIGINT",
+	},
+	"dt_boolean": {
+		Label:            "BOOLEAN",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BOOLEAN",
+	},
+	"dt_float1": {
+		Label:            "FLOAT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "FLOAT",
+	},
+	"dt_float2": {
+		Label:            "FLOAT(size,d)",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "FLOAT(${1:int},${2:int})",
+	},
+	"dt_double": {
+		Label:            "DOUBLE(size,d)",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "DOUBLE(${1:int},${2:int})",
+	},
+	"dt_double_precision": {
+		Label:            "DOUBLE PRECISION(size,d)",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "DOUBLE PRECISION(${1:int},${2:int})",
+	},
+	"dt_decimal": {
+		Label:            "DECIMAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatSnippet,
+		InsertText:       "DECIMAL(${1:int},${2:int})",
+	},
+	"dt_real": {
+		Label:            "REAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "REAL",
+	},
+	"dt_numeric": {
+		Label:            "NUMERIC",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "NUMERIC",
+	},
+	"dt_smallserial": {
+		Label:            "SMALLSERIAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "SMALLSERIAL",
+	},
+	"dt_serial": {
+		Label:            "SERIAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "SERIAL",
+	},
+	"dt_bigserial": {
+		Label:            "BIGSERIAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BIGSERIAL",
+	},
+	"dt_money": {
+		Label:            "MONEY",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "MONEY",
+	},
+	// Date/Time
+	"dt_date": {
+		Label:            "DATE",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "DATE",
 	},
 	"dt_datetime": {
 		Label:            "DATETIME",
@@ -609,12 +766,137 @@ var CompletionItems = map[string]CompletionDetail{
 		InsertTextFormat: protocol.InsertTextFormatPlainText,
 		InsertText:       "DATETIME",
 	},
-	"dt_char": {
-		Label:            "CHAR",
+	"dt_timestamp": {
+		Label:            "TIMESTAMP",
 		Kind:             protocol.CompletionItemKindTypeParameter,
 		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "CHAR",
+		InsertText:       "TIMESTAMP",
 	},
+	"dt_timestamptz": {
+		Label:            "TIMESTAMPTZ",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TIMESTAMPTZ",
+	},
+	"dt_time": {
+		Label:            "TIME",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "TIME",
+	},
+	"dt_year": {
+		Label:            "YEAR",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "YEAR",
+	},
+	"dt_interval": {
+		Label:            "INTERVAL",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "INTERVAL",
+	},
+	// Geometric
+	"dt_point": {
+		Label:            "POINT",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "POINT",
+	},
+	"dt_line": {
+		Label:            "LINE",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "LINE",
+	},
+	"dt_lseg": {
+		Label:            "LSEG",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "LSEG",
+	},
+	"dt_box": {
+		Label:            "BOX",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "BOX",
+	},
+	"dt_path": {
+		Label:            "PATH",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "PATH",
+	},
+	"dt_polygon": {
+		Label:            "POLYGON",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "POLYGON",
+	},
+	"dt_circle": {
+		Label:            "CIRCLE",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "CIRCLE",
+	},
+	// Network
+	"dt_cidr": {
+		Label:            "CIDR",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "CIDR",
+	},
+	"dt_inet": {
+		Label:            "INET",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "INET",
+	},
+	"dt_macaddr": {
+		Label:            "MACADDR",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "MACADDR",
+	},
+	"dt_macaddr8": {
+		Label:            "MACADDR8",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "MACADDR8",
+	},
+	// Other
+	"dt_uuid": {
+		Label:            "UUID",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "UUID",
+	},
+	"dt_xml": {
+		Label:            "XML",
+		Kind:             protocol.CompletionItemKindTypeParameter,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "XML",
+	},
+	// Constraints
+	"autoincrement": {
+		Label:            "AUTOINCREMENT",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "AUTOINCREMENT",
+	},
+	"auto_increment": {
+		Label:            "AUTO_INCREMENT",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "AUTO_INCREMENT",
+	},
+	"unsigned": {
+		Label:            "UNSIGNED",
+		Kind:             protocol.CompletionItemKindKeyword,
+		InsertTextFormat: protocol.InsertTextFormatPlainText,
+		InsertText:       "UNSIGNED",
+	},
+	// Queries
 	"select_from": {
 		Label:            "SELECT FROM",
 		Kind:             protocol.CompletionItemKindSnippet,
@@ -728,18 +1010,6 @@ var CompletionItems = map[string]CompletionDetail{
 		Kind:             protocol.CompletionItemKindSnippet,
 		InsertTextFormat: protocol.InsertTextFormatSnippet,
 		InsertText:       "FULL OUTER JOIN ${1:table_name} ON ${2:table_name}.${3:column_name} = ${4:table_name}.${5:column_name}",
-	},
-	"autoincrement": {
-		Label:            "AUTOINCREMENT",
-		Kind:             protocol.CompletionItemKindKeyword,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "AUTOINCREMENT",
-	},
-	"auto_increment": {
-		Label:            "AUTO_INCREMENT",
-		Kind:             protocol.CompletionItemKindKeyword,
-		InsertTextFormat: protocol.InsertTextFormatPlainText,
-		InsertText:       "AUTO_INCREMENT",
 	},
 	"primary_key": {
 		Label:            "PRIMARY KEY",
