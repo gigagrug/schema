@@ -1352,16 +1352,9 @@ func printTable(headers []string, data [][]string) string {
 }
 
 var (
-	appStyle = lipgloss.NewStyle()
-
-	inputStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), true).
-			BorderForeground(lipgloss.Color("240"))
-
-	tableListPaneStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder(), false, true, false, false).
-				BorderForeground(lipgloss.Color("240"))
-
+	appStyle            = lipgloss.NewStyle()
+	inputStyle          = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
+	tableListPaneStyle  = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, true, false, false).BorderForeground(lipgloss.Color("240"))
 	tableDataPaneStyle  = lipgloss.NewStyle().PaddingLeft(1)
 	selectedItemStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
 	unselectedItemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
