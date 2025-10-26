@@ -36,9 +36,9 @@ var dbSchemaCache = make(map[string][]string)
 var lspActiveDbType string
 
 func main() {
-	var migrate MigrateFlag
+	var migrate optionalValueFlag
 	flag.Var(&migrate, "migrate", "migrate database")
-	var rollback RollbackFlag
+	var rollback optionalValueFlag
 	flag.Var(&rollback, "rollback", "rollback last file or a specific file")
 	v := flag.Bool("v", false, "version")
 	i := flag.Bool("i", false, "init schema files")
@@ -750,53 +750,29 @@ func main() {
 	}
 }
 
-type MigrateFlag struct {
+type optionalValueFlag struct {
 	isSet bool
 	value string
 }
 
-func (m *MigrateFlag) String() string {
-	if !m.isSet {
+func (f *optionalValueFlag) String() string {
+	if !f.isSet {
 		return ""
 	}
-	return m.value
+	return f.value
 }
-func (m *MigrateFlag) Set(s string) error {
-	m.isSet = true
+
+func (f *optionalValueFlag) Set(s string) error {
+	f.isSet = true
 	if s == "" {
-		m.value = "true"
+		f.value = "true"
 	} else {
-		m.value = s
-	}
-	return nil
-}
-func (m *MigrateFlag) IsBoolFlag() bool {
-	return true
-}
-
-type RollbackFlag struct {
-	isSet bool
-	value string
-}
-
-func (r *RollbackFlag) String() string {
-	if !r.isSet {
-		return ""
-	}
-	return r.value
-}
-
-func (r *RollbackFlag) Set(s string) error {
-	r.isSet = true
-	if s == "" {
-		r.value = "true"
-	} else {
-		r.value = s
+		f.value = s
 	}
 	return nil
 }
 
-func (r *RollbackFlag) IsBoolFlag() bool {
+func (f *optionalValueFlag) IsBoolFlag() bool {
 	return true
 }
 
