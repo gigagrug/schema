@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -49,7 +50,7 @@ func main() {
 	lsp := flag.Bool("lsp", false, "run language server")
 	remove := flag.String("remove", "", "remove migration file")
 	db := flag.String("db", "sqlite", "add db: sqlite, libsql, postgres, mysql, mariadb")
-	url := flag.String("url", "./schema/dev.db", "add dburl")
+	url := flag.String("url", filepath.Join("schema", "dev.db"), "add dburl")
 	dir := flag.String("dir", "migrations", "choose path under root-directory/")
 	rdir := flag.String("rdir", "schema", "root directory")
 
@@ -106,14 +107,14 @@ func main() {
 		return
 	}
 
-	schemaPath := fmt.Sprintf("./%s/db.schema", *rdir)
+	schemaPath := filepath.Join(*rdir, "db.schema")
 
 	if *i {
 		if !flagUsed("url") && *db == "sqlite" {
-			flag.Set("url", fmt.Sprintf("./%s/dev.db", *rdir))
+			flag.Set("url", filepath.Join(*rdir, "dev.db"))
 		}
 		if _, err := os.Stat(schemaPath); os.IsNotExist(err) {
-			err := os.Mkdir(fmt.Sprintf("./%s/", *rdir), 0700)
+			err := os.Mkdir(filepath.Join(*rdir), 0700)
 			if err != nil {
 				log.Fatalf("Error creating schema/migrations directory: %v\n", err)
 			}
@@ -130,26 +131,29 @@ func main() {
 			}
 		}
 
-		if _, err := os.Stat("./.env"); os.IsNotExist(err) {
-			envFile, err := os.Create("./.env")
+		envPath := ".env"
+		safeUrl := filepath.ToSlash(*url)
+
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			envFile, err := os.Create(envPath)
 			if err != nil {
 				log.Fatalf("Error creating .env file: %v\n", err)
 			}
 			defer envFile.Close()
 
-			schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, strings.ToUpper(*rdir), *url)
+			schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, strings.ToUpper(*rdir), safeUrl)
 			_, err = envFile.WriteString(schemaContent)
 			if err != nil {
 				log.Fatalf("Error writing to .env file: %v\n", err)
 			}
 		} else {
-			envFile, err := os.OpenFile("./.env", os.O_APPEND|os.O_WRONLY, 0600)
+			envFile, err := os.OpenFile(envPath, os.O_APPEND|os.O_WRONLY, 0600)
 			if err != nil {
 				log.Fatalf("Error opening .env file: %v\n", err)
 			}
 			defer envFile.Close()
 
-			schemaContent := fmt.Sprintf("\n%s_DB_URL=\"%s\"", strings.ToUpper(*rdir), *url)
+			schemaContent := fmt.Sprintf("\n%s_DB_URL=\"%s\"", strings.ToUpper(*rdir), safeUrl)
 			_, err = envFile.WriteString(schemaContent)
 			if err != nil {
 				log.Fatalf("Error appending to .env file: %v\n", err)
@@ -205,20 +209,23 @@ func main() {
 
 	if flagUsed("url") {
 		upperRdir := strings.ToUpper(*rdir)
-		if _, err := os.Stat("./.env"); os.IsNotExist(err) {
-			envFile, err := os.Create("./.env")
+		envPath := ".env"
+		safeUrl := filepath.ToSlash(*url)
+
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			envFile, err := os.Create(envPath)
 			if err != nil {
 				log.Fatalf("Error creating .env file: %v\n", err)
 			}
 			defer envFile.Close()
 
-			schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, *url)
+			schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, safeUrl)
 			_, err = envFile.WriteString(schemaContent)
 			if err != nil {
 				log.Fatalf("Error writing to .env file: %v\n", err)
 			}
 		} else {
-			envFile, err := os.OpenFile("./.env", os.O_RDWR, 0600)
+			envFile, err := os.OpenFile(envPath, os.O_RDWR, 0600)
 			if err != nil {
 				log.Fatalf("Error opening .env file: %v\n", err)
 			}
@@ -230,14 +237,14 @@ func main() {
 			for scanner.Scan() {
 				line := scanner.Text()
 				if strings.HasPrefix(line, fmt.Sprintf("%s_DB_URL=", upperRdir)) {
-					lines = append(lines, fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, *url))
+					lines = append(lines, fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, safeUrl))
 					found = true
 				} else {
 					lines = append(lines, line)
 				}
 			}
 			if !found {
-				lines = append(lines, fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, *url))
+				lines = append(lines, fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, safeUrl))
 			}
 
 			envFile.Seek(0, 0)
@@ -308,7 +315,7 @@ func main() {
 
 	if *sqlFlag != "" {
 		if strings.HasSuffix(strings.TrimSpace(*sqlFlag), ".sql") {
-			fileP := fmt.Sprintf("./%s/%s/%s", *rdir, *dir, *sqlFlag)
+			fileP := filepath.Join(*rdir, *dir, *sqlFlag)
 			sqlFile, err := os.ReadFile(fileP)
 			if err != nil {
 				log.Fatalf("Error reading SQL file: %v\n", err)
@@ -423,7 +430,7 @@ func main() {
 		if *dir == "migrations" {
 			CheckTableExists(conn, dbtype, *rdir)
 		}
-		dirPath := fmt.Sprintf("./%s/%s/", *rdir, *dir)
+		dirPath := filepath.Join(*rdir, *dir)
 		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
 			err := os.MkdirAll(dirPath, 0700)
 			if err != nil {
@@ -451,7 +458,7 @@ func main() {
 		fileCount := maxPrefix + 1
 
 		fileName := fmt.Sprintf("%d_%s.sql", fileCount, *create)
-		schemaFile, err := os.Create(dirPath + fileName)
+		schemaFile, err := os.Create(filepath.Join(dirPath, fileName))
 		if err != nil {
 			log.Fatalf("Error creating file: %v\n", err)
 		}
@@ -525,7 +532,7 @@ func main() {
 			}
 		}
 
-		filePath := fmt.Sprintf("./%s/migrations/%s", *rdir, migrationFileName)
+		filePath := filepath.Join(*rdir, "migrations", migrationFileName)
 		removeErr := os.Remove(filePath)
 		if removeErr != nil {
 			if os.IsNotExist(removeErr) {
@@ -542,7 +549,7 @@ func main() {
 	if migrate.isSet {
 		CheckTableExists(conn, dbtype, *rdir)
 
-		migrationsDir := fmt.Sprintf("./%s/migrations", *rdir)
+		migrationsDir := filepath.Join(*rdir, "migrations")
 		localMigrationFiles, err := os.ReadDir(migrationsDir)
 		if err != nil {
 			log.Fatalf("Error reading migrations directory '%s': %v\n", migrationsDir, err)
@@ -587,7 +594,7 @@ func main() {
 
 		if migrate.String() != "true" {
 			migrationFileName := migrate.String()
-			fileP := fmt.Sprintf("./%s/migrations/%s.sql", *rdir, migrationFileName)
+			fileP := filepath.Join(*rdir, "migrations", migrationFileName+".sql")
 			sqlFile, err := os.ReadFile(fileP)
 			if err != nil {
 				log.Fatalf("Error reading SQL file: %v\n", err)
@@ -647,7 +654,7 @@ func main() {
 			}
 
 			for _, entry := range files {
-				fileP := fmt.Sprintf("./%s/migrations/%s", *rdir, entry.Name)
+				fileP := filepath.Join(*rdir, "migrations", entry.Name)
 				sqlFile, err := os.ReadFile(fileP)
 				if err != nil {
 					log.Fatalf("Error reading SQL file for migration %s: %v\n", entry.Name, err)
@@ -705,7 +712,7 @@ func main() {
 			migrationFileName = migrationToRollback + ".sql"
 		}
 
-		fileP := fmt.Sprintf("./%s/%s/%s.sql", *rdir, *dir, migrationToRollback)
+		fileP := filepath.Join(*rdir, *dir, migrationToRollback+".sql")
 		sqlFile, err := os.ReadFile(fileP)
 		if err != nil {
 			log.Fatalf("Error reading SQL file for rollback: %v\n", err)
@@ -794,7 +801,7 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 	err := conn.QueryRow(query).Scan(&name)
 
 	if err == sql.ErrNoRows {
-		migrationsDir := fmt.Sprintf("./%s/migrations", rdir)
+		migrationsDir := filepath.Join(rdir, "migrations")
 		if _, dirErr := os.Stat(migrationsDir); os.IsNotExist(dirErr) {
 			err = os.MkdirAll(migrationsDir, 0700)
 			if err != nil {
@@ -802,7 +809,7 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 			}
 		}
 
-		initFilePath := fmt.Sprintf("./%s/migrations/0_init.sql", rdir)
+		initFilePath := filepath.Join(rdir, "migrations", "0_init.sql")
 		if _, fileErr := os.Stat(initFilePath); os.IsNotExist(fileErr) {
 			file, err := os.Create(initFilePath)
 			if err != nil {
@@ -849,7 +856,7 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 			log.Fatalf("Error executing SQL to insert 0_init.sql record: %v\n", err)
 		}
 
-		err = PullDBSchema(conn, dbtype, fmt.Sprintf("./%s/db.schema", rdir))
+		err = PullDBSchema(conn, dbtype, filepath.Join(rdir, "db.schema"))
 		if err != nil {
 			log.Fatalf("Migrate2: Err pulling schema %v\n", err)
 		}
