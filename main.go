@@ -1210,7 +1210,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 		for rows.Next() {
 			var tableName string
 			if err := rows.Scan(&tableName); err != nil {
-				return fmt.Errorf("error scanning mysql table name: %s, %v\n", tableName, err)
+				return fmt.Errorf("error scanning mysql table name: %s, %v", tableName, err)
 			}
 			tableNames = append(tableNames, tableName)
 		}
@@ -1385,7 +1385,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	if !ok {
 		return
 	}
-	str := fmt.Sprintf("%s", i)
+	str := string(i)
 	fn := itemStyle.Render
 	if index == m.Index() {
 		fn = func(s ...string) string {
