@@ -1308,10 +1308,7 @@ func printTable(headers []string, data [][]string) string {
 	gray := lipgloss.Color("245")
 	white := lipgloss.Color("#FFFFFF")
 
-	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(white)).
-		Bold(true).
-		Align(lipgloss.Center)
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(white)).Bold(true).Align(lipgloss.Center)
 	cellBaseStyle := lipgloss.NewStyle().Padding(0, 1)
 	oddRowStyle := cellBaseStyle.Foreground(gray)
 	evenRowStyle := cellBaseStyle.Foreground(lightGray)
