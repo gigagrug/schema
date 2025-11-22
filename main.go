@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -1331,6 +1333,31 @@ func printTable(headers []string, data [][]string) string {
 	return t.Render()
 }
 
+type keyMap struct {
+	Tab        key.Binding
+	Search     key.Binding
+	Clear      key.Binding
+	RunQuery   key.Binding
+	Navigation key.Binding
+	Enter      key.Binding
+	Quit       key.Binding
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Tab, k.Search, k.Clear, k.RunQuery, k.Navigation, k.Enter, k.Quit}
+}
+func (k keyMap) FullHelp() [][]key.Binding { return nil }
+
+var keys = keyMap{
+	Tab:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus next")),
+	Search:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+	Clear:      key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear input")),
+	RunQuery:   key.NewBinding(key.WithKeys("f5"), key.WithHelp("f5", "run query")),
+	Navigation: key.NewBinding(key.WithKeys("up", "down", "left", "right", "k", "j", "h", "l"), key.WithHelp("↑/↓/←/→", "nav")),
+	Enter:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
+	Quit:       key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+}
+
 var (
 	appStyle           = lipgloss.NewStyle()
 	inputStyle         = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
@@ -1338,8 +1365,6 @@ var (
 	tableDataPaneStyle = lipgloss.NewStyle().PaddingLeft(1)
 	errorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	footerStyle        = lipgloss.NewStyle().MarginTop(1).Padding(0, 1)
-	keyStyle           = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Bold(true)
-	descStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	titleStyle         = lipgloss.NewStyle()
 	itemStyle          = lipgloss.NewStyle().PaddingLeft(2)
 	selectedItemStyle  = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
@@ -1376,6 +1401,8 @@ type model struct {
 	sqlTextarea        textarea.Model
 	viewport           viewport.Model
 	tableList          list.Model
+	help               help.Model
+	keys               keyMap
 	focusedPane        int
 	selectedTable      string
 	columns            []string
@@ -1417,12 +1444,16 @@ func initialModel(db *sql.DB, dbType string) model {
 	vp := viewport.New(80, 20)
 	vp.SetContent("Select a table to view its data or run a query.")
 
+	h := help.New()
+
 	return model{
 		db:          db,
 		dbType:      dbType,
 		sqlTextarea: ta,
 		viewport:    vp,
 		tableList:   tl,
+		help:        h,
+		keys:        keys,
 		focusedPane: 0,
 	}
 }
@@ -1439,6 +1470,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.help.Width = msg.Width
 		inputHeight := lipgloss.Height(m.sqlTextarea.View())
 		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
 		listWidth := 24
@@ -1449,10 +1481,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c":
+		switch {
+		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-		case "tab":
+		case key.Matches(msg, m.keys.Tab):
 			m.focusedPane = (m.focusedPane + 1) % 3
 			if m.focusedPane == 0 {
 				m.sqlTextarea.Focus()
@@ -1460,7 +1492,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sqlTextarea.Blur()
 			}
 			return m, nil
-		case "f5":
+		case key.Matches(msg, m.keys.RunQuery):
 			if m.focusedPane == 0 {
 				query := m.sqlTextarea.Value()
 				if query != "" {
@@ -1477,8 +1509,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.focusedPane {
 		case 0:
-			switch msg.String() {
-			case "esc":
+			switch {
+			case key.Matches(msg, m.keys.Clear):
 				m.sqlTextarea.SetValue("")
 			default:
 				m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
@@ -1486,8 +1518,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case 1:
-			switch msg.String() {
-			case "enter":
+			switch {
+			case key.Matches(msg, m.keys.Enter):
 				if i := m.tableList.SelectedItem(); i != nil {
 					m.selectedTable = string(i.(tableItem))
 					m.showingQueryResult = false
@@ -1498,10 +1530,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 
 		case 2:
-			switch msg.String() {
-			case "left", "h":
+			switch {
+			case msg.String() == "left" || msg.String() == "h":
 				m.viewport.ScrollLeft(10)
-			case "right", "l":
+			case msg.String() == "right" || msg.String() == "l":
 				m.viewport.ScrollRight(10)
 			default:
 				m.viewport, cmd = m.viewport.Update(msg)
@@ -1540,35 +1572,10 @@ func (m model) View() string {
 	inputView := inputStyle.Render(m.sqlTextarea.View())
 	finalTableListContent := listStyle.Render(m.tableList.View())
 	finalTableDataContent := dataStyle.Render(m.viewport.View())
+	footerView := footerStyle.Render(m.help.View(m.keys))
 
-	var help strings.Builder
-	help.WriteString(keyStyle.Render("Tab"))
-	help.WriteString(descStyle.Render(" Focus Next ") + "• ")
-	help.WriteString(keyStyle.Render("/"))
-	help.WriteString(descStyle.Render(" Search ") + "• ")
-	help.WriteString(keyStyle.Render("Esc"))
-	help.WriteString(descStyle.Render(" Clear Input ") + "• ")
-	help.WriteString(keyStyle.Render("F5"))
-	help.WriteString(descStyle.Render(" Run Query ") + "• ")
-	help.WriteString(keyStyle.Render("↑/↓/←/→/k/j/h/l"))
-	help.WriteString(descStyle.Render(" Nav ") + "• ")
-	help.WriteString(keyStyle.Render("Ctrl+c"))
-	help.WriteString(descStyle.Render(" Quit"))
-
-	footerView := footerStyle.Render(help.String())
-
-	horizontalPanes := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		finalTableListContent,
-		finalTableDataContent,
-	)
-
-	return appStyle.Render(lipgloss.JoinVertical(
-		lipgloss.Left,
-		inputView,
-		horizontalPanes,
-		footerView,
-	))
+	horizontalPanes := lipgloss.JoinHorizontal(lipgloss.Top, finalTableListContent, finalTableDataContent)
+	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, inputView, horizontalPanes, footerView))
 }
 
 func (m *model) executeSQLQuery(query string) {
@@ -1716,13 +1723,11 @@ func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("unsupported database type for listing tables: %s", dbType)
 	}
-
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tables (%s): %w", dbType, err)
 	}
 	defer rows.Close()
-
 	var tables []string
 	for rows.Next() {
 		var tableName string
@@ -1731,18 +1736,15 @@ func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
 		}
 		tables = append(tables, tableName)
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error (%s): %w", dbType, err)
 	}
-
 	return tables, nil
 }
 
 func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error) {
 	var cols []string
 	var query string
-
 	switch dbType {
 	case "sqlite", "libsql":
 		query = `SELECT name FROM PRAGMA_TABLE_INFO(?);`
@@ -1753,13 +1755,11 @@ func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error
 	default:
 		return nil, fmt.Errorf("unsupported database type for loading table data: %s", dbType)
 	}
-
 	rows, err := db.Query(query, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table info for %s (%s): %w", tableName, dbType, err)
 	}
 	defer rows.Close()
-
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -1767,10 +1767,8 @@ func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error
 		}
 		cols = append(cols, name)
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration error on getSQLColumns (%s): %w", dbType, err)
 	}
-
 	return cols, nil
 }
