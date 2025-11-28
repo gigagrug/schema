@@ -1305,20 +1305,42 @@ func flagUsed(name string) bool {
 	return found
 }
 
-func printTable(headers []string, data [][]string) string {
-	lightGray := lipgloss.Color("240")
-	gray := lipgloss.Color("245")
-	white := lipgloss.Color("#FFFFFF")
+func truncate(s string, max int) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	runes := []rune(s)
+	if len(runes) > max {
+		return string(runes[:max-1]) + "…"
+	}
+	return s
+}
 
-	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(white)).Bold(true).Align(lipgloss.Center)
+func printTable(headers []string, data [][]string) string {
+	const maxColWidth = 50
+
+	cleanHeaders := make([]string, len(headers))
+	for i, h := range headers {
+		cleanHeaders[i] = truncate(h, maxColWidth)
+	}
+
+	cleanData := make([][]string, len(data))
+	for i, row := range data {
+		newRow := make([]string, len(row))
+		for j, cell := range row {
+			newRow[j] = truncate(cell, maxColWidth)
+		}
+		cleanData[i] = newRow
+	}
+
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Align(lipgloss.Center)
 	cellBaseStyle := lipgloss.NewStyle().Padding(0, 1)
-	oddRowStyle := cellBaseStyle.Foreground(gray)
-	evenRowStyle := cellBaseStyle.Foreground(lightGray)
+	oddRowStyle := cellBaseStyle.Foreground(lipgloss.Color("245"))
+	evenRowStyle := cellBaseStyle.Foreground(lipgloss.Color("240"))
 
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
-		Headers(headers...).
-		Rows(data...).
+		Headers(cleanHeaders...).
+		Rows(cleanData...).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			switch {
 			case row == table.HeaderRow:
