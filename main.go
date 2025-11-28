@@ -1494,8 +1494,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	var listStyle lipgloss.Style
 	dataStyle := tableDataPaneStyle
+	currentInputStyle := inputStyle
 
 	switch m.focusedPane {
+	case 0:
+		currentInputStyle = inputStyle.BorderForeground(lipgloss.Color("170"))
+		listStyle = tableListPaneStyle
 	case 1:
 		listStyle = tableListPaneStyle.BorderForeground(lipgloss.Color("170"))
 	case 2:
@@ -1505,11 +1509,10 @@ func (m model) View() string {
 		listStyle = tableListPaneStyle
 	}
 
-	inputView := inputStyle.Render(m.sqlTextarea.View())
+	inputView := currentInputStyle.Render(m.sqlTextarea.View())
 	finalTableListContent := listStyle.Render(m.tableList.View())
 	finalTableDataContent := dataStyle.Render(m.viewport.View())
 	footerView := footerStyle.Render(m.help.View(m.keys))
-
 	horizontalPanes := lipgloss.JoinHorizontal(lipgloss.Top, finalTableListContent, finalTableDataContent)
 	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, inputView, horizontalPanes, footerView))
 }
