@@ -171,6 +171,8 @@ func main() {
 	}
 	defer conn.Close()
 
+	dialect := GetDialect(dbtype)
+
 	if *lsp {
 		log.Println("Starting LSP server...")
 		commonlog.Configure(1, nil)
@@ -473,16 +475,7 @@ func main() {
 				log.Fatalf("Error writing template to file: %v", err)
 			}
 
-			var sqlInsert string
-			switch dbtype {
-			case "postgres":
-				sqlInsert = "INSERT INTO _schema_migrations (file) VALUES ($1)"
-			case "sqlite", "libsql", "mysql", "mariadb":
-				sqlInsert = "INSERT INTO _schema_migrations (file) VALUES (?)"
-			default:
-				log.Fatalf("Unsupported database type: %s", dbtype)
-			}
-			_, err = conn.Exec(sqlInsert, fileName)
+			_, err = conn.Exec(dialect.Insert, fileName, false)
 			if err != nil {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
@@ -498,18 +491,7 @@ func main() {
 		}
 
 		var migrated bool
-		var query string
-		switch dbtype {
-		case "postgres":
-			query = "SELECT migrated FROM _schema_migrations WHERE file = $1"
-		case "sqlite", "libsql", "mysql", "mariadb":
-			query = "SELECT migrated FROM _schema_migrations WHERE file = ?"
-		default:
-			log.Fatalf("Unsupported database type: %s", dbtype)
-		}
-
-		err := conn.QueryRow(query, migrationFileName).Scan(&migrated)
-
+		err := conn.QueryRow(dialect.SelectStatus, migrationFileName).Scan(&migrated)
 		if err != nil && err != sql.ErrNoRows {
 			log.Fatalf("Error checking migration status for %s: %v\n", migrationFileName, err)
 		}
@@ -519,16 +501,7 @@ func main() {
 		}
 
 		if err != sql.ErrNoRows {
-			var sqlDelete string
-			switch dbtype {
-			case "postgres":
-				sqlDelete = "DELETE FROM _schema_migrations WHERE file = $1"
-			case "sqlite", "libsql", "mysql", "mariadb":
-				sqlDelete = "DELETE FROM _schema_migrations WHERE file = ?"
-			default:
-				log.Fatalf("Unsupported database type: %s", dbtype)
-			}
-			_, delErr := conn.Exec(sqlDelete, migrationFileName)
+			_, delErr := conn.Exec(dialect.Delete, migrationFileName)
 			if delErr != nil {
 				log.Fatalf("Failed to delete migration record for '%s' from database: %v\n", migrationFileName, delErr)
 			}
@@ -571,20 +544,10 @@ func main() {
 			dbMigrationFiles[filename] = true
 		}
 
-		var sqlInsert string
-		switch dbtype {
-		case "postgres":
-			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, false)"
-		case "sqlite", "libsql", "mysql", "mariadb":
-			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES (?, false)"
-		default:
-			log.Fatalf("Unsupported database type for inserting new migration files: %s", dbtype)
-		}
-
 		for _, entry := range localMigrationFiles {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
 				if _, exists := dbMigrationFiles[entry.Name()]; !exists {
-					_, err = conn.Exec(sqlInsert, entry.Name())
+					_, err = conn.Exec(dialect.Insert, entry.Name(), false)
 					if err != nil {
 						fmt.Printf("Warning: Could not add migration file '%s' to _schema_migrations table: %v\n", entry.Name(), err)
 					} else {
@@ -610,16 +573,7 @@ func main() {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
 
-			var sqlUpdate string
-			switch dbtype {
-			case "postgres":
-				sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = $1"
-			case "sqlite", "libsql", "mysql", "mariadb":
-				sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = ?"
-			default:
-				log.Fatalf("Unsupported database type: %s", dbtype)
-			}
-			_, err = conn.Exec(sqlUpdate, migrationFileName+".sql")
+			_, err = conn.Exec(dialect.Update, true, migrationFileName+".sql")
 			if err != nil {
 				log.Fatalf("Error executing SQL: %v\n", err)
 			}
@@ -670,16 +624,7 @@ func main() {
 					log.Fatalf("Error executing SQL for migration %s: %v\n", entry.Name, err)
 				}
 
-				var sqlUpdate string
-				switch dbtype {
-				case "postgres":
-					sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = $1"
-				case "sqlite", "libsql", "mysql", "mariadb":
-					sqlUpdate = "UPDATE _schema_migrations SET migrated = true WHERE file = ?"
-				default:
-					log.Fatalf("Migrate2: Unsupported database type: %s", dbtype)
-				}
-				_, err = conn.Exec(sqlUpdate, entry.Name)
+				_, err = conn.Exec(dialect.Update, true, entry.Name)
 				if err != nil {
 					log.Fatalf("Error updating migration status for %s: %v\n", entry.Name, err)
 				}
@@ -734,16 +679,7 @@ func main() {
 		}
 
 		if *dir == "migrations" {
-			var sqlUpdate string
-			switch dbtype {
-			case "postgres":
-				sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = $1"
-			case "sqlite", "libsql", "mysql", "mariadb":
-				sqlUpdate = "UPDATE _schema_migrations SET migrated = false WHERE file = ?"
-			default:
-				log.Fatalf("Unsupported database type for rollback: %s", dbtype)
-			}
-			_, err = conn.Exec(sqlUpdate, migrationFileName)
+			_, err = conn.Exec(dialect.Update, false, migrationFileName)
 			if err != nil {
 				log.Fatalf("Error updating migration status after rollback for %s: %v\n", migrationFileName, err)
 			}
@@ -786,21 +722,13 @@ func (f *optionalValueFlag) IsBoolFlag() bool {
 }
 
 func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
-	var query string
-	var name string
-
-	switch dbtype {
-	case "sqlite", "libsql":
-		query = "SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'"
-	case "postgres":
-		query = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = '_schema_migrations'"
-	case "mysql", "mariadb":
-		query = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '_schema_migrations'"
-	default:
+	dialect := GetDialect(dbtype)
+	if dialect.Type == "" {
 		log.Fatalf("Unsupported database type for table existence check: %s", dbtype)
 	}
 
-	err := conn.QueryRow(query).Scan(&name)
+	var name string
+	err := conn.QueryRow(dialect.TableExists).Scan(&name)
 
 	if err == sql.ErrNoRows {
 		migrationsDir := filepath.Join(rdir, "migrations")
@@ -819,18 +747,10 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 			}
 			defer file.Close()
 
-			var sqlTable string
-			switch dbtype {
-			case "sqlite":
-				sqlTable = "PRAGMA journal_mode=WAL;\n\nCREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "libsql":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "postgres":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
-			case "mysql", "mariadb":
-				sqlTable = "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);"
+			if dbtype == "sqlite" {
+				_, _ = file.WriteString("PRAGMA journal_mode=WAL;\n\n")
 			}
-			_, err = file.WriteString(sqlTable)
+			_, err = file.WriteString(dialect.CreateInit)
 			if err != nil {
 				log.Fatalf("Error writing to 0_init.sql file: %v\n", err)
 			}
@@ -846,14 +766,7 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 			log.Fatalf("Error executing SQL to create _schema_migrations table: %v\n", err)
 		}
 
-		var sqlInsert string
-		switch dbtype {
-		case "postgres":
-			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, true)"
-		case "sqlite", "libsql", "mysql", "mariadb":
-			sqlInsert = "INSERT INTO _schema_migrations (file, migrated) VALUES (?, true)"
-		}
-		_, err = conn.Exec(sqlInsert, "0_init.sql")
+		_, err = conn.Exec(dialect.Insert, "0_init.sql", true)
 		if err != nil {
 			log.Fatalf("Error executing SQL to insert 0_init.sql record: %v\n", err)
 		}
@@ -955,6 +868,7 @@ func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
 	}
 	return conn, dbType, nil
 }
+
 func splitOnTopLevelCommas(s string) []string {
 	var parts []string
 	parenLevel := 0
@@ -1734,18 +1648,12 @@ func (m *model) loadTableData(tableName string) error {
 }
 
 func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
-	var query string
-	switch dbType {
-	case "sqlite", "libsql":
-		query = "SELECT name FROM sqlite_master WHERE type='table';"
-	case "postgres":
-		query = "SELECT tablename FROM pg_tables WHERE schemaname = 'public';"
-	case "mysql", "mariadb":
-		query = "SHOW TABLES;"
-	default:
+	dialect := GetDialect(dbType)
+	if dialect.ListTables == "" {
 		return nil, fmt.Errorf("unsupported database type for listing tables: %s", dbType)
 	}
-	rows, err := db.Query(query)
+
+	rows, err := db.Query(dialect.ListTables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tables (%s): %w", dbType, err)
 	}
@@ -1766,18 +1674,12 @@ func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
 
 func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error) {
 	var cols []string
-	var query string
-	switch dbType {
-	case "sqlite", "libsql":
-		query = `SELECT name FROM PRAGMA_TABLE_INFO(?);`
-	case "postgres":
-		query = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;`
-	case "mysql", "mariadb":
-		query = `SELECT column_name	FROM information_schema.columns	WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position;`
-	default:
+	dialect := GetDialect(dbType)
+	if dialect.ListCols == "" {
 		return nil, fmt.Errorf("unsupported database type for loading table data: %s", dbType)
 	}
-	rows, err := db.Query(query, tableName)
+
+	rows, err := db.Query(dialect.ListCols, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table info for %s (%s): %w", tableName, dbType, err)
 	}
@@ -1793,4 +1695,58 @@ func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error
 		return nil, fmt.Errorf("rows iteration error on getSQLColumns (%s): %w", dbType, err)
 	}
 	return cols, nil
+}
+
+type Dialect struct {
+	Type         string
+	TableExists  string
+	CreateInit   string
+	Insert       string
+	Update       string
+	Delete       string
+	SelectStatus string
+	ListTables   string
+	ListCols     string
+}
+
+func GetDialect(dbType string) Dialect {
+	switch dbType {
+	case "postgres":
+		return Dialect{
+			Type:         "postgres",
+			TableExists:  "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = '_schema_migrations'",
+			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
+			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, $2)",
+			Update:       "UPDATE _schema_migrations SET migrated = $1 WHERE file = $2",
+			Delete:       "DELETE FROM _schema_migrations WHERE file = $1",
+			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = $1",
+			ListTables:   "SELECT tablename FROM pg_tables WHERE schemaname = 'public';",
+			ListCols:     "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;",
+		}
+	case "sqlite", "libsql":
+		return Dialect{
+			Type:         dbType,
+			TableExists:  "SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'",
+			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
+			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES (?, ?)",
+			Update:       "UPDATE _schema_migrations SET migrated = ? WHERE file = ?",
+			Delete:       "DELETE FROM _schema_migrations WHERE file = ?",
+			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = ?",
+			ListTables:   "SELECT name FROM sqlite_master WHERE type='table';",
+			ListCols:     "SELECT name FROM PRAGMA_TABLE_INFO(?);",
+		}
+	case "mysql", "mariadb":
+		return Dialect{
+			Type:         dbType,
+			TableExists:  "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '_schema_migrations'",
+			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
+			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES (?, ?)",
+			Update:       "UPDATE _schema_migrations SET migrated = ? WHERE file = ?",
+			Delete:       "DELETE FROM _schema_migrations WHERE file = ?",
+			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = ?",
+			ListTables:   "SHOW TABLES;",
+			ListCols:     "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position;",
+		}
+	}
+	return Dialect{}
 }
