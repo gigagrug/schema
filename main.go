@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -1593,9 +1594,16 @@ func (m *model) loadTableData(tableName string) error {
 	m.data = nil
 	m.showingQueryResult = false
 
-	var cols []string
-	var err error
+	validTables, err := getSQLTables(m.db, m.dbType)
+	if err != nil {
+		return fmt.Errorf("failed to fetch valid tables for verification: %w", err)
+	}
 
+	if !slices.Contains(validTables, tableName) {
+		return fmt.Errorf("invalid table name: %s", tableName)
+	}
+
+	var cols []string
 	cols, err = getSQLColumns(m.db, m.dbType, tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table columns for %s: %w", tableName, err)
