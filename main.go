@@ -19,11 +19,13 @@ import (
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/table"
+
+	// "charm.land/lipgloss/v2/table"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -742,7 +744,7 @@ func runSQL(args []string) {
 				if col == nil {
 					row[i] = "NULL"
 				} else {
-					row[i] = fmt.Sprintf("%s", col)
+					row[i] = fmt.Sprintf("%v", col)
 				}
 			}
 			data = append(data, row)
@@ -779,7 +781,7 @@ func runSQL(args []string) {
 				if col == nil {
 					row[i] = "NULL"
 				} else {
-					row[i] = fmt.Sprintf("%s", col)
+					row[i] = fmt.Sprintf("%v", col)
 				}
 			}
 			data = append(data, row)
@@ -1348,49 +1350,66 @@ func truncate(s string, max int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	runes := []rune(s)
 	if len(runes) > max {
-		return string(runes[:max-1]) + "…"
+		limit := max - 1
+		if limit < 0 {
+			limit = 0
+		}
+		return string(runes[:limit]) + "…"
 	}
 	return s
 }
 
 func printTable(headers []string, data [][]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
 	const maxColWidth = 50
-
-	cleanHeaders := make([]string, len(headers))
+	widths := make([]int, len(headers))
 	for i, h := range headers {
-		cleanHeaders[i] = truncate(h, maxColWidth)
+		widths[i] = min(len(h), maxColWidth)
 	}
+	for _, row := range data {
+		for i, cell := range row {
+			if i < len(widths) {
+				l := min(
+					len(cell), maxColWidth)
 
-	cleanData := make([][]string, len(data))
-	for i, row := range data {
-		newRow := make([]string, len(row))
-		for j, cell := range row {
-			newRow[j] = truncate(cell, maxColWidth)
-		}
-		cleanData[i] = newRow
-	}
-
-	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true).Align(lipgloss.Center)
-	cellBaseStyle := lipgloss.NewStyle().Padding(0, 1)
-	oddRowStyle := cellBaseStyle.Foreground(lipgloss.Color("245"))
-	evenRowStyle := cellBaseStyle.Foreground(lipgloss.Color("240"))
-
-	t := table.New().
-		Border(lipgloss.NormalBorder()).
-		Headers(cleanHeaders...).
-		Rows(cleanData...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			switch {
-			case row == table.HeaderRow:
-				return headerStyle
-			case row%2 == 0:
-				return evenRowStyle
-			default:
-				return oddRowStyle
+				if l > widths[i] {
+					widths[i] = l
+				}
 			}
-		})
-
-	return t.Render()
+		}
+	}
+	buildSeparator := func() string {
+		var sb strings.Builder
+		sb.WriteString("+")
+		for _, w := range widths {
+			sb.WriteString(strings.Repeat("-", w+2))
+			sb.WriteString("+")
+		}
+		return sb.String()
+	}
+	var sb strings.Builder
+	separator := buildSeparator()
+	sb.WriteString(separator + "\n")
+	sb.WriteString("|")
+	for i, h := range headers {
+		val := truncate(h, widths[i])
+		fmt.Fprintf(&sb, " %-*s |", widths[i], val)
+	}
+	sb.WriteString("\n" + separator + "\n")
+	for _, row := range data {
+		sb.WriteString("|")
+		for i, cell := range row {
+			if i < len(widths) {
+				val := truncate(cell, widths[i])
+				fmt.Fprintf(&sb, " %-*s |", widths[i], val)
+			}
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(separator)
+	return sb.String()
 }
 
 type keyMap struct {
@@ -1428,7 +1447,9 @@ var (
 	titleStyle         = lipgloss.NewStyle()
 	itemStyle          = lipgloss.NewStyle().PaddingLeft(2)
 	selectedItemStyle  = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
-	paginationStyle    = list.DefaultStyles(true).PaginationStyle.PaddingLeft(2)
+	tableStyle         = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
+	tableHeaderStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Bold(true).Padding(0, 1)
+	tableSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Bold(false)
 )
 
 type tableItem string
@@ -1465,14 +1486,11 @@ type model struct {
 	keys               keyMap
 	focusedPane        int
 	selectedTable      string
-	columns            []string
-	data               [][]string
-	queryColumns       []string
-	queryData          [][]string
 	queryError         error
 	showingQueryResult bool
 	width              int
 	height             int
+	table              table.Model
 }
 
 func initialModel(db *sql.DB, dbType string) model {
@@ -1492,7 +1510,6 @@ func initialModel(db *sql.DB, dbType string) model {
 	tl.SetShowHelp(false)
 	tl.DisableQuitKeybindings()
 	tl.Styles.Title = titleStyle
-	tl.Styles.PaginationStyle = paginationStyle
 
 	ta := textarea.New()
 	ta.Placeholder = "Input SQL query"
@@ -1506,6 +1523,12 @@ func initialModel(db *sql.DB, dbType string) model {
 
 	h := help.New()
 
+	t := table.New(table.WithFocused(true), table.WithHeight(7))
+	s := table.DefaultStyles()
+	s.Header = tableHeaderStyle
+	s.Selected = tableSelectedStyle
+	t.SetStyles(s)
+
 	return model{
 		db:          db,
 		dbType:      dbType,
@@ -1515,6 +1538,7 @@ func initialModel(db *sql.DB, dbType string) model {
 		help:        h,
 		keys:        keys,
 		focusedPane: 0,
+		table:       t,
 	}
 }
 
@@ -1537,7 +1561,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
 		m.viewport.SetWidth(m.width - listWidth - tableDataPaneStyle.GetHorizontalFrameSize() - 4)
 		m.viewport.SetHeight(paneHeight)
+		m.table.SetHeight(paneHeight)
 		m.tableList.SetSize(listWidth, paneHeight)
+		if m.showingQueryResult || len(m.table.Columns()) > 0 {
+			m.viewport.SetContent(m.table.View())
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1592,9 +1620,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case 2:
 			switch {
 			case msg.String() == "left" || msg.String() == "h":
-				m.viewport.ScrollLeft(10)
+				m.viewport.ScrollLeft(5)
 			case msg.String() == "right" || msg.String() == "l":
-				m.viewport.ScrollRight(10)
+				m.viewport.ScrollRight(5)
+			case msg.String() == "up" || msg.String() == "down" || msg.String() == "k" || msg.String() == "j":
+				m.table, cmd = m.table.Update(msg)
+				cmds = append(cmds, cmd)
+				m.viewport.SetContent(m.table.View())
 			default:
 				m.viewport, cmd = m.viewport.Update(msg)
 				cmds = append(cmds, cmd)
@@ -1604,14 +1636,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
 		cmds = append(cmds, cmd)
-
 		m.tableList, cmd = m.tableList.Update(msg)
 		cmds = append(cmds, cmd)
-
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	}
-
 	return m, tea.Batch(cmds...)
 }
 
@@ -1641,30 +1670,115 @@ func (m model) View() tea.View {
 	return tea.NewView(appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, inputView, horizontalPanes, footerView)))
 }
 
+func (m *model) loadTableData(tableName string) error {
+	m.queryError = nil
+	m.showingQueryResult = false
+	m.table.SetCursor(0)
+	m.viewport.GotoTop()
+	m.viewport.SetXOffset(0)
+
+	m.table.SetRows(nil)
+
+	validTables, err := getSQLTables(m.db, m.dbType)
+	if err != nil {
+		return fmt.Errorf("failed to fetch valid tables: %w", err)
+	}
+	if !slices.Contains(validTables, tableName) {
+		return fmt.Errorf("invalid table name: %s", tableName)
+	}
+
+	cols, err := getSQLColumns(m.db, m.dbType, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get table columns: %w", err)
+	}
+
+	var tableColumns []table.Column
+	totalWidth := 0
+	for _, col := range cols {
+		w := max(len(col)+10, 10)
+		tableColumns = append(tableColumns, table.Column{Title: col, Width: w})
+		totalWidth += w
+	}
+	m.table.SetColumns(tableColumns)
+
+	if totalWidth < m.viewport.Width() {
+		m.table.SetWidth(m.viewport.Width())
+	} else {
+		m.table.SetWidth(totalWidth)
+	}
+
+	dataRows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName))
+	if err != nil {
+		return fmt.Errorf("failed to query data: %w", err)
+	}
+	defer dataRows.Close()
+
+	var tableRows []table.Row
+	if len(cols) > 0 {
+		values := make([]sql.RawBytes, len(cols))
+		scanArgs := make([]any, len(values))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+
+		for dataRows.Next() {
+			err = dataRows.Scan(scanArgs...)
+			if err != nil {
+				return fmt.Errorf("failed to scan row: %w", err)
+			}
+			var row []string
+			for _, colVal := range values {
+				if colVal == nil {
+					row = append(row, "NULL")
+				} else {
+					row = append(row, string(colVal))
+				}
+			}
+			tableRows = append(tableRows, row)
+		}
+	}
+	m.table.SetRows(tableRows)
+	m.viewport.SetContent(m.table.View())
+	return nil
+}
+
 func (m *model) executeSQLQuery(query string) {
 	m.queryError = nil
-	m.queryColumns = nil
-	m.queryData = nil
 	m.showingQueryResult = true
+	m.table.SetCursor(0)
+	m.viewport.GotoTop()
+	m.viewport.SetXOffset(0)
+	m.table.SetRows(nil)
 
 	rows, err := m.db.Query(query)
 	if err != nil {
 		m.queryError = err
 		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
-		m.viewport.GotoTop()
 		return
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		m.queryError = fmt.Errorf("failed to get columns from query result: %w", err)
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
-		m.viewport.GotoTop()
+		m.queryError = fmt.Errorf("failed to get columns: %w", err)
+		m.viewport.SetContent(errorStyle.Render(m.queryError.Error()))
 		return
 	}
 
-	m.queryColumns = cols
+	var tableColumns []table.Column
+	totalWidth := 0
+	for _, col := range cols {
+		w := max(len(col)+10, 10)
+		tableColumns = append(tableColumns, table.Column{Title: col, Width: w})
+		totalWidth += w
+	}
+	m.table.SetColumns(tableColumns)
+
+	if totalWidth < m.viewport.Width() {
+		m.table.SetWidth(m.viewport.Width())
+	} else {
+		m.table.SetWidth(totalWidth)
+	}
 
 	values := make([]sql.RawBytes, len(cols))
 	scanArgs := make([]any, len(values))
@@ -1672,13 +1786,12 @@ func (m *model) executeSQLQuery(query string) {
 		scanArgs[i] = &values[i]
 	}
 
-	var data [][]string
+	var tableRows []table.Row
 	for rows.Next() {
 		err = rows.Scan(scanArgs...)
 		if err != nil {
-			m.queryError = fmt.Errorf("failed to scan row data from query result: %w", err)
-			m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
-			m.viewport.GotoTop()
+			m.queryError = fmt.Errorf("failed to scan row: %w", err)
+			m.viewport.SetContent(errorStyle.Render(m.queryError.Error()))
 			return
 		}
 
@@ -1690,95 +1803,17 @@ func (m *model) executeSQLQuery(query string) {
 				row = append(row, string(colVal))
 			}
 		}
-		data = append(data, row)
+		tableRows = append(tableRows, row)
 	}
-	m.queryData = data
 
 	if err := rows.Err(); err != nil {
-		m.queryError = fmt.Errorf("rows iteration error for query result: %w", err)
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("SQL Error:\n%v", m.queryError.Error())))
-		m.viewport.GotoTop()
+		m.queryError = fmt.Errorf("rows iteration error: %w", err)
+		m.viewport.SetContent(errorStyle.Render(m.queryError.Error()))
 		return
 	}
 
-	if m.queryError == nil {
-		if len(m.queryColumns) > 0 || len(m.queryData) > 0 {
-			m.viewport.SetContent(printTable(m.queryColumns, m.queryData))
-		} else {
-			m.viewport.SetContent("Query executed successfully, no rows returned or no data to display.")
-		}
-	}
-	m.viewport.GotoTop()
-}
-
-func (m *model) loadTableData(tableName string) error {
-	m.queryError = nil
-	m.columns = nil
-	m.data = nil
-	m.showingQueryResult = false
-
-	validTables, err := getSQLTables(m.db, m.dbType)
-	if err != nil {
-		return fmt.Errorf("failed to fetch valid tables for verification: %w", err)
-	}
-
-	if !slices.Contains(validTables, tableName) {
-		return fmt.Errorf("invalid table name: %s", tableName)
-	}
-
-	var cols []string
-	cols, err = getSQLColumns(m.db, m.dbType, tableName)
-	if err != nil {
-		return fmt.Errorf("failed to get table columns for %s: %w", tableName, err)
-	}
-	m.columns = cols
-
-	dataRows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName))
-	if err != nil {
-		return fmt.Errorf("failed to query data for %s: %w", tableName, err)
-	}
-	defer dataRows.Close()
-
-	var tableData [][]string
-	if len(cols) > 0 {
-		values := make([]sql.RawBytes, len(cols))
-		scanArgs := make([]any, len(values))
-		for i := range values {
-			scanArgs[i] = &values[i]
-		}
-
-		for dataRows.Next() {
-			err = dataRows.Scan(scanArgs...)
-			if err != nil {
-				return fmt.Errorf("failed to scan row data: %w", err)
-			}
-
-			var row []string
-			for _, colVal := range values {
-				if colVal == nil {
-					row = append(row, "NULL")
-				} else {
-					row = append(row, string(colVal))
-				}
-			}
-			tableData = append(tableData, row)
-		}
-	}
-	m.data = tableData
-
-	if err := dataRows.Err(); err != nil {
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Error:\n%v", err)))
-		return fmt.Errorf("rows iteration error: %w", err)
-	}
-
-	if len(m.columns) > 0 {
-		m.viewport.SetContent(printTable(m.columns, m.data))
-	} else {
-		m.viewport.SetContent("No columns found or table is empty.")
-	}
-	m.viewport.GotoTop()
-
-	return nil
+	m.table.SetRows(tableRows)
+	m.viewport.SetContent(m.table.View())
 }
 
 func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
