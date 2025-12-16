@@ -15,10 +15,12 @@ import (
 const lspName = "Schema"
 
 var (
-	handler       protocol.Handler
-	documentStore = make(map[string]string)
-	mutex         sync.RWMutex
-	lspLog        = commonlog.GetLogger("schema.lsp")
+	dbSchemaCache   = make(map[string][]string)
+	lspActiveDbType string
+	handler         protocol.Handler
+	documentStore   = make(map[string]string)
+	mutex           sync.RWMutex
+	lspLog          = commonlog.GetLogger("schema.lsp")
 )
 
 func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {

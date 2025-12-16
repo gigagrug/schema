@@ -16,14 +16,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -36,534 +36,474 @@ import (
 )
 
 var version = "dev"
-var dbSchemaCache = make(map[string][]string)
-var lspActiveDbType string
 
 func main() {
-	var migrate optionalValueFlag
-	flag.Var(&migrate, "migrate", "migrate database")
-	var rollback optionalValueFlag
-	flag.Var(&rollback, "rollback", "rollback last file or a specific file")
-	v := flag.Bool("v", false, "version")
-	i := flag.Bool("i", false, "init schema files")
-	create := flag.String("create", "", "create sql file name")
-	pull := flag.Bool("pull", false, "get database schema")
-	sqlFlag := flag.String("sql", "", "run sql commands")
-	studio := flag.Bool("studio", false, "database studio")
-	lsp := flag.Bool("lsp", false, "run language server")
-	remove := flag.String("remove", "", "remove migration file")
-	db := flag.String("db", "sqlite", "add db: sqlite, libsql, postgres, mysql, mariadb")
-	url := flag.String("url", filepath.Join("schema", "dev.db"), "add dburl")
-	dir := flag.String("dir", "migrations", "choose path under root-directory/")
-	rdir := flag.String("rdir", "schema", "root directory")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
-		fmt.Fprintln(os.Stderr, "All in one CLI tool for the database")
-		fmt.Fprintln(os.Stderr, "\nOptions:")
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-	if flag.NFlag() == 0 {
-		fmt.Printf(`
+	if len(os.Args) < 2 {
+		fmt.Print(`
  ____       _                          
-/ ___|  ___| |__   ___ _ __ ___   __ _ 
+/ ___|  ___| |__   ___ ________   ____ 
 \___ \ / __| '_ \ / _ \  _   _ \ / _  |
  ___) | (__| | | |  __/ | | | | | (_| |
 |____/ \___|_| |_|\___|_| |_| |_|\__,_|
 `)
-		return
+		os.Exit(0)
 	}
 
-	if *v {
-		fmt.Println("Version:", version)
-
-		url := "https://api.github.com/repos/gigagrug/schema/releases/latest"
-		resp, err := http.Get(url)
-		if err != nil {
-			log.Fatalf("Error fetching release data from GitHub: %v\n", err)
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Fatalf("Error reading GitHub response body: %v\n", err)
-		}
-
-		var result map[string]any
-		err = json.Unmarshal(body, &result)
-		if err != nil {
-			log.Fatalf("Error unmarshalling JSON: %v\n", err)
-		}
-
-		latestVersion, ok := result["tag_name"].(string)
-		if !ok {
-			log.Fatalf("Could not find 'tag_name' or it was not a string in the GitHub release data\n")
-		}
-
-		if version != latestVersion {
-			fmt.Printf("Outdated! Latest version: %s\n", latestVersion)
-			fmt.Printf("curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | sh -s\n")
-		} else {
-			fmt.Println("Using latest version")
-		}
-		return
+	switch os.Args[1] {
+	case "help":
+		printHelp()
+	case "version":
+		checkVersion()
+	case "init":
+		runInit(os.Args[2:])
+	case "create":
+		runCreate(os.Args[2:])
+	case "migrate":
+		runMigrate(os.Args[2:])
+	case "studio":
+		runStudio(os.Args[2:])
+	case "rollback":
+		runRollback(os.Args[2:])
+	case "remove":
+		runRemove(os.Args[2:])
+	case "pull":
+		runPull(os.Args[2:])
+	case "sql":
+		runSQL(os.Args[2:])
+	case "config":
+		runConfig(os.Args[2:])
+	case "lsp":
+		runLSP(os.Args[2:])
+	default:
+		fmt.Printf("Unknown command: %s\nExpected Subcommands: studio, migrate, create, rollback, init, pull, sql, lsp, help, version, config\n", os.Args[1])
+		os.Exit(0)
 	}
+}
+
+func printHelp() {
+	fmt.Fprintf(os.Stderr, "Path: %s", os.Args[0])
+	fmt.Print(`
+Commands:
+	init       Initialize database schema and .env
+	config     Update database configuration (url, db type)
+	studio     Open the TUI database studio
+	migrate    Run pending migrations (use -file to run specific)
+	create     Create a new migration file (e.g., create -name=schema)
+	rollback   Rollback the last migration
+	remove     Remove a migration file
+	pull       Update schema file from database
+	sql        Run a raw SQL query or file
+	lsp        Start the language server
+	version    Check version
+
+Global Flags:
+	-rdir      Root directory (default "schema")
+	-dir       Migrations directory (default "migrations")
+`)
+}
+
+func checkVersion() {
+	fmt.Println("Version:", version)
+
+	url := "https://api.github.com/repos/gigagrug/schema/releases/latest"
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("Error fetching release data from GitHub: %v\n", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalf("Error reading GitHub response body: %v\n", err)
+	}
+
+	var result map[string]any
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		log.Fatalf("Error unmarshalling JSON: %v\n", err)
+	}
+
+	latestVersion, ok := result["tag_name"].(string)
+	if !ok {
+		log.Fatalf("Could not find 'tag_name' or it was not a string in the GitHub release data\n")
+	}
+
+	if version != latestVersion {
+		fmt.Printf("Outdated! Latest version: %s\n", latestVersion)
+		fmt.Printf("curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | sh -s\n")
+	} else {
+		fmt.Println("Using latest version")
+	}
+}
+
+func runInit(args []string) {
+	cmd := flag.NewFlagSet("init", flag.ExitOnError)
+	db := cmd.String("db", "sqlite", "database type")
+	url := cmd.String("url", filepath.Join("schema", "dev.db"), "database url")
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
 
-	if *i {
-		if !flagUsed("url") && *db == "sqlite" {
-			flag.Set("url", filepath.Join(*rdir, "dev.db"))
-		}
-		if _, err := os.Stat(schemaPath); os.IsNotExist(err) {
-			err := os.Mkdir(filepath.Join(*rdir), 0700)
-			if err != nil {
-				log.Fatalf("Error creating schema/migrations directory: %v\n", err)
-			}
-			schemaFile, err := os.Create(schemaPath)
-			if err != nil {
-				log.Fatalf("Error creating file: %v\n", err)
-			}
-			defer schemaFile.Close()
-
-			fileContent := fmt.Sprintf("db = \"%s\"\nurl = env(\"%s_DB_URL\")", *db, strings.ToUpper(*rdir))
-			_, err = schemaFile.WriteString(fileContent)
-			if err != nil {
-				log.Fatalf("Error writing to file: %v\n", err)
-			}
-		}
-
-		envPath := ".env"
-		safeUrl := filepath.ToSlash(*url)
-
-		if _, err := os.Stat(envPath); os.IsNotExist(err) {
-			envFile, err := os.Create(envPath)
-			if err != nil {
-				log.Fatalf("Error creating .env file: %v\n", err)
-			}
-			defer envFile.Close()
-
-			schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, strings.ToUpper(*rdir), safeUrl)
-			_, err = envFile.WriteString(schemaContent)
-			if err != nil {
-				log.Fatalf("Error writing to .env file: %v\n", err)
-			}
-		} else {
-			envFile, err := os.OpenFile(envPath, os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				log.Fatalf("Error opening .env file: %v\n", err)
-			}
-			defer envFile.Close()
-
-			schemaContent := fmt.Sprintf("\n%s_DB_URL=\"%s\"", strings.ToUpper(*rdir), safeUrl)
-			_, err = envFile.WriteString(schemaContent)
-			if err != nil {
-				log.Fatalf("Error appending to .env file: %v\n", err)
-			}
-		}
-		fmt.Println("Schema successfully initialized")
-		return
+	if !isFlagPassed(cmd, "url") && *db == "sqlite" {
+		*url = filepath.Join(*rdir, "dev.db")
 	}
 
-	conn, dbtype, err := Conn2DB(schemaPath)
-	if err != nil {
-		log.Fatalf("SQL Flag: Error connecting to database: %v\n", err)
-	}
-	defer conn.Close()
-
-	dialect := GetDialect(dbtype)
-
-	if *lsp {
-		log.Println("Starting LSP server...")
-		commonlog.Configure(1, nil)
-		lspActiveDbType = dbtype
-
-		log.Println("LSP: Caching database schema...")
-		tables, err := getSQLTables(conn, dbtype)
+	if _, err := os.Stat(schemaPath); os.IsNotExist(err) {
+		err := os.Mkdir(filepath.Join(*rdir), 0700)
 		if err != nil {
-			log.Fatalf("LSP failed to get tables: %v", err)
+			log.Fatalf("Error creating schema/migrations directory: %v\n", err)
 		}
-
-		for _, table := range tables {
-			columns, err := getSQLColumns(conn, dbtype, table)
-			if err != nil {
-				log.Printf("LSP warning: could not get columns for table %s: %v", table, err)
-				continue
-			}
-			dbSchemaCache[table] = columns
-		}
-		log.Printf("LSP: Cached %d tables.", len(dbSchemaCache))
-
-		handler = protocol.Handler{
-			Initialize:             initialize,
-			Initialized:            initialized,
-			Shutdown:               shutdown,
-			SetTrace:               setTrace,
-			TextDocumentCompletion: textDocumentCompletion,
-			TextDocumentDidOpen:    textDocumentDidOpen,
-			TextDocumentDidChange:  textDocumentDidChange,
-			TextDocumentDidSave:    textDocumentDidSave,
-			TextDocumentFormatting: textDocumentFormatting,
-		}
-
-		server := server.NewServer(&handler, lspName, false)
-		server.RunStdio()
-		return
-	}
-
-	if flagUsed("url") {
-		upperRdir := strings.ToUpper(*rdir)
-		envPath := ".env"
-		safeUrl := filepath.ToSlash(*url)
-
-		if _, err := os.Stat(envPath); os.IsNotExist(err) {
-			envFile, err := os.Create(envPath)
-			if err != nil {
-				log.Fatalf("Error creating .env file: %v\n", err)
-			}
-			defer envFile.Close()
-
-			schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, safeUrl)
-			_, err = envFile.WriteString(schemaContent)
-			if err != nil {
-				log.Fatalf("Error writing to .env file: %v\n", err)
-			}
-		} else {
-			envFile, err := os.OpenFile(envPath, os.O_RDWR, 0600)
-			if err != nil {
-				log.Fatalf("Error opening .env file: %v\n", err)
-			}
-			defer envFile.Close()
-
-			scanner := bufio.NewScanner(envFile)
-			var lines []string
-			var found bool
-			for scanner.Scan() {
-				line := scanner.Text()
-				if strings.HasPrefix(line, fmt.Sprintf("%s_DB_URL=", upperRdir)) {
-					lines = append(lines, fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, safeUrl))
-					found = true
-				} else {
-					lines = append(lines, line)
-				}
-			}
-			if !found {
-				lines = append(lines, fmt.Sprintf(`%s_DB_URL="%s"`, upperRdir, safeUrl))
-			}
-
-			envFile.Seek(0, 0)
-			envFile.Truncate(0)
-			for _, line := range lines {
-				_, err := envFile.WriteString(line + "\n")
-				if err != nil {
-					log.Fatalf("Error writing to .env file: %v\n", err)
-				}
-			}
-		}
-	}
-
-	if flagUsed("db") {
-		if _, err := os.Stat(schemaPath); err == nil {
-			file, err := os.OpenFile(schemaPath, os.O_RDWR, 0600)
-			if err != nil {
-				log.Fatalf("Error opening db.schema file: %v\n", err)
-			}
-			defer file.Close()
-
-			scanner := bufio.NewScanner(file)
-			var lines []string
-			var found bool
-			for scanner.Scan() {
-				line := scanner.Text()
-				if strings.HasPrefix(line, "db = ") {
-					lines = append(lines, fmt.Sprintf(`db = "%s"`, *db))
-					found = true
-				} else {
-					lines = append(lines, line)
-				}
-			}
-			if !found {
-				lines = append(lines, fmt.Sprintf(`db = "%s"`, *db))
-				fmt.Println("db not found")
-			}
-
-			file.Seek(0, 0)
-			file.Truncate(0)
-			for _, line := range lines {
-				_, err := file.WriteString(line + "\n")
-				if err != nil {
-					log.Fatalf("Error writing to db.schema file: %v\n", err)
-				}
-			}
-		} else {
-			log.Fatalf("db.schema file does not exist.\n")
-		}
-		return
-	}
-
-	if *studio {
-		p := tea.NewProgram(initialModel(conn, dbtype))
-		if _, err := p.Run(); err != nil {
-			log.Fatalf("Error running program: %v", err)
-		}
-		return
-	}
-
-	if *pull {
-		err = PullDBSchema(conn, dbtype, schemaPath)
-		if err != nil {
-			log.Fatalf("Err pulling db schema: %v\n", err)
-		}
-		return
-	}
-
-	if *sqlFlag != "" {
-		if strings.HasSuffix(strings.TrimSpace(*sqlFlag), ".sql") {
-			fileP := filepath.Join(*rdir, *dir, *sqlFlag)
-			sqlFile, err := os.ReadFile(fileP)
-			if err != nil {
-				log.Fatalf("Error reading SQL file: %v\n", err)
-			}
-			rows, err := conn.Query(string(sqlFile))
-			if err != nil {
-				log.Fatalf("Error executing SQL query: %v\n", err)
-			}
-			defer rows.Close()
-
-			columns, err := rows.Columns()
-			if err != nil {
-				log.Fatalf("Error getting columns: %v\n", err)
-			}
-
-			var data [][]string
-			values := make([]any, len(columns))
-			scanArgs := make([]any, len(columns))
-			for i := range values {
-				scanArgs[i] = &values[i]
-			}
-
-			for rows.Next() {
-				err = rows.Scan(scanArgs...)
-				if err != nil {
-					log.Fatalf("Error scanning row: %v\n", err)
-				}
-				row := make([]string, len(columns))
-				for i, col := range values {
-					if col == nil {
-						row[i] = "NULL"
-					} else {
-						switch v := col.(type) {
-						case []byte:
-							row[i] = string(v)
-						default:
-							row[i] = fmt.Sprintf("%v", v)
-						}
-					}
-				}
-				data = append(data, row)
-			}
-			if err = rows.Err(); err != nil {
-				log.Fatalf("Error iterating rows: %v\n", err)
-			}
-			fmt.Println(printTable(columns, data))
-			err = PullDBSchema(conn, dbtype, schemaPath)
-			if err != nil {
-				log.Fatalf("Error pulling DB schema after migration: %v\n", err)
-			}
-			return
-		} else if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(*sqlFlag)), "SELECT") {
-			rows, err := conn.Query(*sqlFlag)
-			if err != nil {
-				log.Fatalf("Error executing SQL query: %v\n", err)
-			}
-			defer rows.Close()
-
-			columns, err := rows.Columns()
-			if err != nil {
-				log.Fatalf("Error getting columns: %v\n", err)
-			}
-
-			var data [][]string
-			values := make([]any, len(columns))
-			scanArgs := make([]any, len(columns))
-			for i := range values {
-				scanArgs[i] = &values[i]
-			}
-
-			for rows.Next() {
-				err = rows.Scan(scanArgs...)
-				if err != nil {
-					log.Fatalf("Error scanning row: %v\n", err)
-				}
-				row := make([]string, len(columns))
-				for i, col := range values {
-					if col == nil {
-						row[i] = "NULL"
-					} else {
-						switch v := col.(type) {
-						case []byte:
-							row[i] = string(v)
-						default:
-							row[i] = fmt.Sprintf("%v", v)
-						}
-					}
-				}
-				data = append(data, row)
-			}
-			if err = rows.Err(); err != nil {
-				log.Fatalf("Error iterating rows: %v\n", err)
-			}
-			fmt.Println(printTable(columns, data))
-		} else {
-			result, err := conn.Exec(*sqlFlag)
-			if err != nil {
-				log.Fatalf("Error executing SQL command: %v\n", err)
-			}
-
-			rowsAffected, err := result.RowsAffected()
-			if err != nil {
-				fmt.Printf("SQL command executed successfully. Could not retrieve rows affected: %v\n", err)
-			} else {
-				fmt.Printf("SQL command executed successfully. Rows affected: %d\n", rowsAffected)
-			}
-		}
-		return
-	}
-
-	if *create != "" {
-		if *dir == "migrations" {
-			CheckTableExists(conn, dbtype, *rdir)
-		}
-		dirPath := filepath.Join(*rdir, *dir)
-		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-			err := os.MkdirAll(dirPath, 0700)
-			if err != nil {
-				log.Fatalf("Error creating %s: %v\n", dirPath, err)
-			}
-		}
-		entries, err := os.ReadDir(dirPath)
-		if err != nil {
-			log.Fatalf("Failed to read directory '%s': %v", dirPath, err)
-		}
-
-		maxPrefix := -1
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				name := entry.Name()
-				parts := strings.SplitN(name, "_", 2)
-				if len(parts) > 0 {
-					prefix, err := strconv.Atoi(parts[0])
-					if err == nil && prefix > maxPrefix {
-						maxPrefix = prefix
-					}
-				}
-			}
-		}
-		fileCount := maxPrefix + 1
-
-		fileName := fmt.Sprintf("%d_%s.sql", fileCount, *create)
-		schemaFile, err := os.Create(filepath.Join(dirPath, fileName))
+		schemaFile, err := os.Create(schemaPath)
 		if err != nil {
 			log.Fatalf("Error creating file: %v\n", err)
 		}
 		defer schemaFile.Close()
 
-		if *dir == "migrations" {
-			template := "\n\n-- schema rollback\n\n"
-			_, err = schemaFile.WriteString(template)
-			if err != nil {
-				log.Fatalf("Error writing template to file: %v", err)
-			}
-
-			_, err = conn.Exec(dialect.Insert, fileName, false)
-			if err != nil {
-				log.Fatalf("Error executing SQL: %v\n", err)
-			}
+		fileContent := fmt.Sprintf("db = \"%s\"\nurl = env(\"%s_DB_URL\")", *db, strings.ToUpper(*rdir))
+		_, err = schemaFile.WriteString(fileContent)
+		if err != nil {
+			log.Fatalf("Error writing to file: %v\n", err)
 		}
-		fmt.Printf("Schema successfully created sql file %s\n", fileName)
-		return
 	}
 
-	if *remove != "" {
-		migrationFileName := *remove
+	envPath := ".env"
+	safeUrl := filepath.ToSlash(*url)
+
+	if _, err := os.Stat(envPath); os.IsNotExist(err) {
+		envFile, err := os.Create(envPath)
+		if err != nil {
+			log.Fatalf("Error creating .env file: %v\n", err)
+		}
+		defer envFile.Close()
+
+		schemaContent := fmt.Sprintf(`%s_DB_URL="%s"`, strings.ToUpper(*rdir), safeUrl)
+		_, err = envFile.WriteString(schemaContent)
+		if err != nil {
+			log.Fatalf("Error writing to .env file: %v\n", err)
+		}
+	} else {
+		envFile, err := os.OpenFile(envPath, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			log.Fatalf("Error opening .env file: %v\n", err)
+		}
+		defer envFile.Close()
+
+		schemaContent := fmt.Sprintf("\n%s_DB_URL=\"%s\"", strings.ToUpper(*rdir), safeUrl)
+		_, err = envFile.WriteString(schemaContent)
+		if err != nil {
+			log.Fatalf("Error appending to .env file: %v\n", err)
+		}
+	}
+	fmt.Println("Schema successfully initialized")
+}
+
+func runCreate(args []string) {
+	cmd := flag.NewFlagSet("create", flag.ExitOnError)
+	dir := cmd.String("dir", "migrations", "directory path")
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	var createName string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		createName = args[0]
+		cmd.Parse(args[1:])
+	} else {
+		cmd.Parse(args)
+		if len(cmd.Args()) > 0 {
+			createName = cmd.Args()[0]
+		}
+	}
+
+	if createName == "" {
+		log.Fatal("Migration name required. Use -name or pass as argument.")
+	}
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+	dialect := GetDialect(dbtype)
+
+	if *dir == "migrations" {
+		CheckTableExists(conn, dbtype, *rdir)
+	}
+
+	dirPath := filepath.Join(*rdir, *dir)
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		err := os.MkdirAll(dirPath, 0700)
+		if err != nil {
+			log.Fatalf("Error creating %s: %v\n", dirPath, err)
+		}
+	}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		log.Fatalf("Failed to read directory '%s': %v", dirPath, err)
+	}
+
+	maxPrefix := -1
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			parts := strings.SplitN(entry.Name(), "_", 2)
+			if len(parts) > 0 {
+				prefix, err := strconv.Atoi(parts[0])
+				if err == nil && prefix > maxPrefix {
+					maxPrefix = prefix
+				}
+			}
+		}
+	}
+	fileCount := maxPrefix + 1
+
+	fileName := fmt.Sprintf("%d_%s.sql", fileCount, createName)
+	schemaFile, err := os.Create(filepath.Join(dirPath, fileName))
+	if err != nil {
+		log.Fatalf("Error creating file: %v\n", err)
+	}
+	defer schemaFile.Close()
+
+	if *dir == "migrations" {
+		template := "\n\n-- schema rollback\n\n"
+		_, err = schemaFile.WriteString(template)
+		if err != nil {
+			log.Fatalf("Error writing template to file: %v", err)
+		}
+
+		_, err = conn.Exec(dialect.Insert, fileName, false)
+		if err != nil {
+			log.Fatalf("Error executing SQL: %v\n", err)
+		}
+	}
+	fmt.Printf("Schema successfully created sql file %s\n", fileName)
+}
+
+func runConfig(args []string) {
+	cmd := flag.NewFlagSet("config", flag.ExitOnError)
+	db := cmd.String("db", "", "update database type (sqlite, postgres, etc)")
+	url := cmd.String("url", "", "update connection url")
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	envPath := ".env"
+	envVarName := strings.ToUpper(*rdir) + "_DB_URL"
+
+	if *url != "" {
+		file, err := os.OpenFile(envPath, os.O_RDWR|os.O_CREATE, 0600)
+		if err != nil {
+			log.Fatalf("Error opening .env: %v", err)
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		var lines []string
+		var found bool
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, envVarName+"=") {
+				lines = append(lines, fmt.Sprintf(`%s="%s"`, envVarName, *url))
+				found = true
+			} else {
+				lines = append(lines, line)
+			}
+		}
+		if !found {
+			lines = append(lines, fmt.Sprintf(`%s="%s"`, envVarName, *url))
+		}
+
+		file.Truncate(0)
+		file.Seek(0, 0)
+		writer := bufio.NewWriter(file)
+		for _, line := range lines {
+			writer.WriteString(line + "\n")
+		}
+		writer.Flush()
+		fmt.Printf("Updated .env: %s\n", *url)
+	}
+
+	if *db != "" {
+		file, err := os.OpenFile(schemaPath, os.O_RDWR, 0600)
+		if err != nil {
+			log.Fatalf("Error opening schema file: %v", err)
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		var lines []string
+		var found bool
+
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "db =") {
+				lines = append(lines, fmt.Sprintf(`db = "%s"`, *db))
+				found = true
+			} else {
+				lines = append(lines, line)
+			}
+		}
+		if !found {
+			lines = append(lines, fmt.Sprintf(`db = "%s"`, *db))
+		}
+
+		file.Truncate(0)
+		file.Seek(0, 0)
+		writer := bufio.NewWriter(file)
+		for _, line := range lines {
+			writer.WriteString(line + "\n")
+		}
+		writer.Flush()
+		fmt.Printf("Updated schema db type: %s\n", *db)
+	}
+
+	if *url == "" && *db == "" {
+		fmt.Println("No flags provided. Use -url or -db to update configuration.")
+	}
+}
+
+func runStudio(args []string) {
+	cmd := flag.NewFlagSet("studio", flag.ExitOnError)
+	url := cmd.String("url", "", "database url")
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	if *url != "" {
+		os.Setenv(strings.ToUpper(*rdir)+"_DB_URL", *url)
+	}
+	schemaPath := filepath.Join(*rdir, "db.schema")
+
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting to database: %v", err)
+	}
+	defer conn.Close()
+
+	p := tea.NewProgram(initialModel(conn, dbtype))
+	if _, err := p.Run(); err != nil {
+		log.Fatalf("Error running studio: %v", err)
+	}
+}
+
+func runMigrate(args []string) {
+	cmd := flag.NewFlagSet("migrate", flag.ExitOnError)
+	rdir := cmd.String("rdir", "schema", "root directory")
+
+	var targetFile string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		targetFile = args[0]
+		cmd.Parse(args[1:])
+	} else {
+		cmd.Parse(args)
+		if len(cmd.Args()) > 0 {
+			targetFile = cmd.Args()[0]
+		}
+	}
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+
+	CheckTableExists(conn, dbtype, *rdir)
+	dialect := GetDialect(dbtype)
+
+	migrationsDir := filepath.Join(*rdir, "migrations")
+	localMigrationFiles, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		log.Fatalf("Error reading migrations directory '%s': %v\n", migrationsDir, err)
+	}
+
+	dbMigrationFiles := make(map[string]bool)
+	rows, err := conn.Query("SELECT file FROM _schema_migrations")
+	if err != nil {
+		log.Fatalf("Error querying _schema_migrations table: %v\n", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var filename string
+		if err := rows.Scan(&filename); err != nil {
+			log.Fatalf("Error scanning migration file from DB: %v\n", err)
+		}
+		dbMigrationFiles[filename] = true
+	}
+
+	for _, entry := range localMigrationFiles {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			if _, exists := dbMigrationFiles[entry.Name()]; !exists {
+				_, err = conn.Exec(dialect.Insert, entry.Name(), false)
+				if err != nil {
+					fmt.Printf("Warning: Could not add migration file '%s' to _schema_migrations table: %v\n", entry.Name(), err)
+				} else {
+					fmt.Printf("Added new migration file '%s' to _schema_migrations table.\n", entry.Name())
+				}
+			}
+		}
+	}
+
+	if targetFile != "" {
+		migrationFileName := targetFile
 		if !strings.HasSuffix(migrationFileName, ".sql") {
 			migrationFileName += ".sql"
 		}
 
-		var migrated bool
-		err := conn.QueryRow(dialect.SelectStatus, migrationFileName).Scan(&migrated)
-		if err != nil && err != sql.ErrNoRows {
-			log.Fatalf("Error checking migration status for %s: %v\n", migrationFileName, err)
-		}
-
-		if err == nil && migrated {
-			log.Fatalf("Cannot remove migration file '%s' because it has already been migrated.", migrationFileName)
-		}
-
-		if err != sql.ErrNoRows {
-			_, delErr := conn.Exec(dialect.Delete, migrationFileName)
-			if delErr != nil {
-				log.Fatalf("Failed to delete migration record for '%s' from database: %v\n", migrationFileName, delErr)
-			}
-		}
-
-		filePath := filepath.Join(*rdir, "migrations", migrationFileName)
-		removeErr := os.Remove(filePath)
-		if removeErr != nil {
-			if os.IsNotExist(removeErr) {
-				fmt.Printf("Migration file '%s' not found on filesystem, but its database record was removed.\n", migrationFileName)
-			} else {
-				log.Fatalf("Error removing migration file '%s' from filesystem: %v\n", filePath, removeErr)
-			}
-		} else {
-			fmt.Printf("Successfully removed migration file '%s' and its database record.\n", migrationFileName)
-		}
-		return
-	}
-
-	if migrate.isSet {
-		CheckTableExists(conn, dbtype, *rdir)
-
-		migrationsDir := filepath.Join(*rdir, "migrations")
-		localMigrationFiles, err := os.ReadDir(migrationsDir)
+		fileP := filepath.Join(*rdir, "migrations", migrationFileName)
+		sqlFile, err := os.ReadFile(fileP)
 		if err != nil {
-			log.Fatalf("Error reading migrations directory '%s': %v\n", migrationsDir, err)
+			log.Fatalf("Error reading SQL file: %v\n", err)
 		}
 
-		dbMigrationFiles := make(map[string]bool)
-		rows, err := conn.Query("SELECT file FROM _schema_migrations")
+		sqlContent := string(sqlFile)
+		migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
+
+		_, err = conn.Exec(migrationSQL)
 		if err != nil {
-			log.Fatalf("Error querying _schema_migrations table: %v\n", err)
+			log.Fatalf("Error executing SQL: %v\n", err)
+		}
+
+		_, err = conn.Exec(dialect.Update, true, migrationFileName)
+		if err != nil {
+			log.Fatalf("Error executing SQL: %v\n", err)
+		}
+
+		err = PullDBSchema(conn, dbtype, schemaPath)
+		if err != nil {
+			log.Fatalf("Error pulling DB schema after migration: %v\n", err)
+		}
+		fmt.Printf("Schema successfully migrated %s\n", migrationFileName)
+
+	} else {
+		rows, err := conn.Query(`SELECT file FROM _schema_migrations WHERE migrated = false ORDER BY id ASC`)
+		if err != nil {
+			log.Fatalf("Error executing SQL query for pending migrations: %v\n", err)
 		}
 		defer rows.Close()
+
+		type Files struct{ Name string }
+		files := []Files{}
 		for rows.Next() {
-			var filename string
-			if err := rows.Scan(&filename); err != nil {
-				log.Fatalf("Error scanning migration file from DB: %v\n", err)
+			var fName string
+			err = rows.Scan(&fName)
+			if err != nil {
+				log.Fatalf("Error scanning row for pending migration file: %v\n", err)
 			}
-			dbMigrationFiles[filename] = true
+			files = append(files, Files{Name: fName})
 		}
 
-		for _, entry := range localMigrationFiles {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
-				if _, exists := dbMigrationFiles[entry.Name()]; !exists {
-					_, err = conn.Exec(dialect.Insert, entry.Name(), false)
-					if err != nil {
-						fmt.Printf("Warning: Could not add migration file '%s' to _schema_migrations table: %v\n", entry.Name(), err)
-					} else {
-						fmt.Printf("Added new migration file '%s' to _schema_migrations table.\n", entry.Name())
-					}
-				}
-			}
+		if len(files) == 0 {
+			fmt.Println("No pending migrations found.")
+			return
 		}
 
-		if migrate.String() != "true" {
-			migrationFileName := migrate.String()
-			fileP := filepath.Join(*rdir, "migrations", migrationFileName+".sql")
+		for _, entry := range files {
+			fileP := filepath.Join(*rdir, "migrations", entry.Name)
 			sqlFile, err := os.ReadFile(fileP)
 			if err != nil {
-				log.Fatalf("Error reading SQL file: %v\n", err)
+				log.Fatalf("Error reading SQL file for migration %s: %v\n", entry.Name, err)
 			}
 
 			sqlContent := string(sqlFile)
@@ -571,155 +511,337 @@ func main() {
 
 			_, err = conn.Exec(migrationSQL)
 			if err != nil {
-				log.Fatalf("Error executing SQL: %v\n", err)
+				log.Fatalf("Error executing SQL for migration %s: %v\n", entry.Name, err)
 			}
 
-			_, err = conn.Exec(dialect.Update, true, migrationFileName+".sql")
+			_, err = conn.Exec(dialect.Update, true, entry.Name)
 			if err != nil {
-				log.Fatalf("Error executing SQL: %v\n", err)
+				log.Fatalf("Error updating migration status for %s: %v\n", entry.Name, err)
 			}
 
 			err = PullDBSchema(conn, dbtype, schemaPath)
 			if err != nil {
-				log.Fatalf("Error pulling DB schema after migration: %v\n", err)
+				log.Fatalf("Error pulling DB schema after migration %s: %v\n", entry.Name, err)
 			}
-			fmt.Printf("Schema successfully migrated %s\n", migrationFileName)
-			return
-		} else {
-			rows, err := conn.Query(`SELECT file FROM _schema_migrations WHERE migrated = false ORDER BY id ASC`)
-			if err != nil {
-				log.Fatalf("Error executing SQL query for pending migrations: %v\n", err)
-			}
-			defer rows.Close()
-
-			type Files struct {
-				Name string
-			}
-			files := []Files{}
-			for rows.Next() {
-				var file string
-				err = rows.Scan(&file)
-				if err != nil {
-					log.Fatalf("Error scanning row for pending migration file: %v\n", err)
-				}
-				files = append(files, Files{Name: file})
-			}
-
-			if len(files) == 0 {
-				fmt.Println("No pending migrations found.")
-				return
-			}
-
-			for _, entry := range files {
-				fileP := filepath.Join(*rdir, "migrations", entry.Name)
-				sqlFile, err := os.ReadFile(fileP)
-				if err != nil {
-					log.Fatalf("Error reading SQL file for migration %s: %v\n", entry.Name, err)
-				}
-
-				sqlContent := string(sqlFile)
-				migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
-
-				_, err = conn.Exec(migrationSQL)
-				if err != nil {
-					log.Fatalf("Error executing SQL for migration %s: %v\n", entry.Name, err)
-				}
-
-				_, err = conn.Exec(dialect.Update, true, entry.Name)
-				if err != nil {
-					log.Fatalf("Error updating migration status for %s: %v\n", entry.Name, err)
-				}
-
-				err = PullDBSchema(conn, dbtype, schemaPath)
-				if err != nil {
-					log.Fatalf("Error pulling DB schema after migration %s: %v\n", entry.Name, err)
-				}
-				fmt.Printf("Schema successfully migrated %s\n", entry.Name)
-			}
+			fmt.Printf("Schema successfully migrated %s\n", entry.Name)
 		}
-		return
+	}
+}
+
+func runRollback(args []string) {
+	cmd := flag.NewFlagSet("rollback", flag.ExitOnError)
+	dir := cmd.String("dir", "migrations", "migrations directory")
+	rdir := cmd.String("rdir", "schema", "root directory")
+
+	var targetFile string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		targetFile = args[0]
+		cmd.Parse(args[1:])
+	} else {
+		cmd.Parse(args)
+		if len(cmd.Args()) > 0 {
+			targetFile = cmd.Args()[0]
+		}
 	}
 
-	if rollback.isSet {
-		var migrationToRollback string
-		var migrationFileName string
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+	dialect := GetDialect(dbtype)
 
-		if rollback.value == "true" {
-			query := `SELECT file FROM _schema_migrations WHERE migrated = true ORDER BY id DESC LIMIT 1`
-			err := conn.QueryRow(query).Scan(&migrationFileName)
-			if err != nil {
-				if err == sql.ErrNoRows {
-					log.Println("No migrations to rollback.")
-					return
-				}
-				log.Fatalf("Error finding last migration to rollback: %v\n", err)
+	var migrationToRollback string
+	var migrationFileName string
+
+	if targetFile == "" {
+		query := `SELECT file FROM _schema_migrations WHERE migrated = true ORDER BY id DESC LIMIT 1`
+		err := conn.QueryRow(query).Scan(&migrationFileName)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				log.Println("No migrations to rollback.")
+				return
 			}
-			migrationToRollback = strings.TrimSuffix(migrationFileName, ".sql")
-		} else {
-			migrationToRollback = rollback.value
-			migrationFileName = migrationToRollback + ".sql"
+			log.Fatalf("Error finding last migration to rollback: %v\n", err)
 		}
+		migrationToRollback = strings.TrimSuffix(migrationFileName, ".sql")
+	} else {
+		migrationToRollback = targetFile
+		// Handle if user typed name with or without .sql extension
+		migrationToRollback = strings.TrimSuffix(migrationToRollback, ".sql")
+		migrationFileName = migrationToRollback + ".sql"
+	}
 
-		fileP := filepath.Join(*rdir, *dir, migrationToRollback+".sql")
+	fileP := filepath.Join(*rdir, *dir, migrationToRollback+".sql")
+	sqlFile, err := os.ReadFile(fileP)
+	if err != nil {
+		log.Fatalf("Error reading SQL file for rollback: %v\n", err)
+	}
+
+	sqlContent := string(sqlFile)
+	parts := strings.Split(sqlContent, "-- schema rollback")
+
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		log.Fatalf("Error: No rollback script found in %s.sql", migrationToRollback)
+	}
+
+	rollbackSQL := parts[1]
+	_, err = conn.Exec(rollbackSQL)
+	if err != nil {
+		log.Fatalf("Error executing rollback SQL for %s.sql: %v\n", migrationToRollback, err)
+	}
+
+	if *dir == "migrations" {
+		_, err = conn.Exec(dialect.Update, false, migrationFileName)
+		if err != nil {
+			log.Fatalf("Error updating migration status after rollback for %s: %v\n", migrationFileName, err)
+		}
+	}
+
+	err = PullDBSchema(conn, dbtype, schemaPath)
+	if err != nil {
+		log.Fatalf("Error pulling DB schema after rollback: %v\n", err)
+	}
+
+	fmt.Printf("Successfully rolled back migration %s\n", migrationFileName)
+}
+
+func runPull(args []string) {
+	cmd := flag.NewFlagSet("pull", flag.ExitOnError)
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+
+	err = PullDBSchema(conn, dbtype, schemaPath)
+	if err != nil {
+		log.Fatalf("Err pulling db schema: %v\n", err)
+	}
+}
+
+func runRemove(args []string) {
+	cmd := flag.NewFlagSet("remove", flag.ExitOnError)
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	var name string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name = args[0]
+		cmd.Parse(args[1:])
+	} else {
+		cmd.Parse(args)
+		name = cmd.Arg(0)
+	}
+	if name == "" {
+		log.Fatal("Usage: remove <migration_name>")
+	}
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+	dialect := GetDialect(dbtype)
+
+	migrationFileName := name
+	if !strings.HasSuffix(migrationFileName, ".sql") {
+		migrationFileName += ".sql"
+	}
+
+	var migrated bool
+	err = conn.QueryRow(dialect.SelectStatus, migrationFileName).Scan(&migrated)
+	if err != nil && err != sql.ErrNoRows {
+		log.Fatalf("Error checking migration status for %s: %v\n", migrationFileName, err)
+	}
+
+	if err == nil && migrated {
+		log.Fatalf("Cannot remove migration file '%s' because it has already been migrated.", migrationFileName)
+	}
+
+	if err != sql.ErrNoRows {
+		_, delErr := conn.Exec(dialect.Delete, migrationFileName)
+		if delErr != nil {
+			log.Fatalf("Failed to delete migration record for '%s' from database: %v\n", migrationFileName, delErr)
+		}
+	}
+
+	filePath := filepath.Join(*rdir, "migrations", migrationFileName)
+	removeErr := os.Remove(filePath)
+	if removeErr != nil {
+		if os.IsNotExist(removeErr) {
+			fmt.Printf("Migration file '%s' not found on filesystem, but its database record was removed.\n", migrationFileName)
+		} else {
+			log.Fatalf("Error removing migration file '%s' from filesystem: %v\n", filePath, removeErr)
+		}
+	} else {
+		fmt.Printf("Successfully removed migration file '%s' and its database record.\n", migrationFileName)
+	}
+}
+
+func runSQL(args []string) {
+	cmd := flag.NewFlagSet("sql", flag.ExitOnError)
+	rdir := cmd.String("rdir", "schema", "root directory")
+	dir := cmd.String("dir", "migrations", "directory")
+	cmd.Parse(args)
+
+	var query string
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		query = args[0]
+		cmd.Parse(args[1:])
+	} else {
+		cmd.Parse(args)
+		query = cmd.Arg(0)
+	}
+
+	if query == "" {
+		log.Fatal("Usage: sql \"SELECT ...\" or sql filename.sql")
+	}
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+
+	if strings.HasSuffix(strings.TrimSpace(query), ".sql") {
+		fileP := filepath.Join(*rdir, *dir, query)
 		sqlFile, err := os.ReadFile(fileP)
 		if err != nil {
-			log.Fatalf("Error reading SQL file for rollback: %v\n", err)
+			log.Fatalf("Error reading SQL file: %v\n", err)
 		}
-
-		sqlContent := string(sqlFile)
-		parts := strings.Split(sqlContent, "-- schema rollback")
-
-		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-			log.Fatalf("Error: No rollback script found in %s.sql", migrationToRollback)
-		}
-
-		rollbackSQL := parts[1]
-		_, err = conn.Exec(rollbackSQL)
+		rows, err := conn.Query(string(sqlFile))
 		if err != nil {
-			log.Fatalf("Error executing rollback SQL for %s.sql: %v\n", migrationToRollback, err)
+			log.Fatalf("Error executing SQL query: %v\n", err)
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			log.Fatalf("Error getting columns: %v\n", err)
 		}
 
-		if *dir == "migrations" {
-			_, err = conn.Exec(dialect.Update, false, migrationFileName)
-			if err != nil {
-				log.Fatalf("Error updating migration status after rollback for %s: %v\n", migrationFileName, err)
-			}
+		var data [][]string
+		values := make([]any, len(columns))
+		scanArgs := make([]any, len(columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
 		}
+		for rows.Next() {
+			rows.Scan(scanArgs...)
+			row := make([]string, len(columns))
+			for i, col := range values {
+				if col == nil {
+					row[i] = "NULL"
+				} else {
+					row[i] = fmt.Sprintf("%s", col)
+				}
+			}
+			data = append(data, row)
+		}
+		fmt.Println(printTable(columns, data))
 
 		err = PullDBSchema(conn, dbtype, schemaPath)
 		if err != nil {
-			log.Fatalf("Error pulling DB schema after rollback: %v\n", err)
+			log.Fatalf("Error pulling DB schema after migration: %v\n", err)
 		}
-
-		fmt.Printf("Successfully rolled back migration %s\n", migrationFileName)
 		return
 	}
-}
 
-type optionalValueFlag struct {
-	isSet bool
-	value string
-}
+	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(query)), "SELECT") {
+		rows, err := conn.Query(query)
+		if err != nil {
+			log.Fatalf("Error executing SQL query: %v\n", err)
+		}
+		defer rows.Close()
+		columns, err := rows.Columns()
+		if err != nil {
+			log.Fatalf("Error getting columns: %v\n", err)
+		}
+		var data [][]string
+		values := make([]any, len(columns))
+		scanArgs := make([]any, len(columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+		for rows.Next() {
+			rows.Scan(scanArgs...)
+			row := make([]string, len(columns))
+			for i, col := range values {
+				if col == nil {
+					row[i] = "NULL"
+				} else {
+					row[i] = fmt.Sprintf("%s", col)
+				}
+			}
+			data = append(data, row)
+		}
+		fmt.Println(printTable(columns, data))
 
-func (f *optionalValueFlag) String() string {
-	if !f.isSet {
-		return ""
-	}
-	return f.value
-}
-
-func (f *optionalValueFlag) Set(s string) error {
-	f.isSet = true
-	if s == "" {
-		f.value = "true"
 	} else {
-		f.value = s
+		result, err := conn.Exec(query)
+		if err != nil {
+			log.Fatalf("Error executing SQL command: %v\n", err)
+		}
+		rowsAffected, _ := result.RowsAffected()
+		fmt.Printf("SQL command executed successfully. Rows affected: %d\n", rowsAffected)
 	}
-	return nil
 }
 
-func (f *optionalValueFlag) IsBoolFlag() bool {
-	return true
+func runLSP(args []string) {
+	cmd := flag.NewFlagSet("lsp", flag.ExitOnError)
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+	conn, dbtype, err := Conn2DB(schemaPath)
+	if err != nil {
+		log.Fatalf("Error connecting to database: %v", err)
+	}
+	defer conn.Close()
+
+	log.Println("Starting LSP server...")
+	commonlog.Configure(1, nil)
+	lspActiveDbType = dbtype
+
+	log.Println("LSP: Caching database schema...")
+	tables, err := getSQLTables(conn, dbtype)
+	if err != nil {
+		log.Fatalf("LSP failed to get tables: %v", err)
+	}
+
+	for _, table := range tables {
+		columns, err := getSQLColumns(conn, dbtype, table)
+		if err != nil {
+			log.Printf("LSP warning: could not get columns for table %s: %v", table, err)
+			continue
+		}
+		dbSchemaCache[table] = columns
+	}
+	log.Printf("LSP: Cached %d tables.", len(dbSchemaCache))
+
+	handler = protocol.Handler{
+		Initialize:             initialize,
+		Initialized:            initialized,
+		Shutdown:               shutdown,
+		SetTrace:               setTrace,
+		TextDocumentCompletion: textDocumentCompletion,
+		TextDocumentDidOpen:    textDocumentDidOpen,
+		TextDocumentDidChange:  textDocumentDidChange,
+		TextDocumentDidSave:    textDocumentDidSave,
+		TextDocumentFormatting: textDocumentFormatting,
+	}
+
+	server := server.NewServer(&handler, lspName, false)
+	server.RunStdio()
 }
 
 func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
@@ -782,6 +904,16 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 	} else if err != nil {
 		log.Fatalf("Error querying table existence: %v\n", err)
 	}
+}
+
+func isFlagPassed(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
@@ -890,6 +1022,7 @@ func splitOnTopLevelCommas(s string) []string {
 	parts = append(parts, s[lastSplit:])
 	return parts
 }
+
 func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	var schema string
 	type ForeignKey struct {
@@ -1210,16 +1343,6 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	return nil
 }
 
-func flagUsed(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
-}
-
 func truncate(s string, max int) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
@@ -1305,7 +1428,7 @@ var (
 	titleStyle         = lipgloss.NewStyle()
 	itemStyle          = lipgloss.NewStyle().PaddingLeft(2)
 	selectedItemStyle  = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
-	paginationStyle    = list.DefaultStyles().PaginationStyle.PaddingLeft(2)
+	paginationStyle    = list.DefaultStyles(true).PaginationStyle.PaddingLeft(2)
 )
 
 type tableItem string
@@ -1378,7 +1501,7 @@ func initialModel(db *sql.DB, dbType string) model {
 	ta.SetHeight(5)
 	ta.Prompt = " "
 
-	vp := viewport.New(80, 20)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	vp.SetContent("Select a table to view its data or run a query.")
 
 	h := help.New()
@@ -1407,13 +1530,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.help.Width = msg.Width
+		m.help.SetWidth(msg.Width)
 		inputHeight := lipgloss.Height(m.sqlTextarea.View())
 		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
 		listWidth := 24
 		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
-		m.viewport.Width = m.width - listWidth - tableDataPaneStyle.GetHorizontalFrameSize() - 4
-		m.viewport.Height = paneHeight
+		m.viewport.SetWidth(m.width - listWidth - tableDataPaneStyle.GetHorizontalFrameSize() - 4)
+		m.viewport.SetHeight(paneHeight)
 		m.tableList.SetSize(listWidth, paneHeight)
 		return m, nil
 
@@ -1492,7 +1615,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	var listStyle lipgloss.Style
 	dataStyle := tableDataPaneStyle
 	currentInputStyle := inputStyle
@@ -1515,7 +1638,7 @@ func (m model) View() string {
 	finalTableDataContent := dataStyle.Render(m.viewport.View())
 	footerView := footerStyle.Render(m.help.View(m.keys))
 	horizontalPanes := lipgloss.JoinHorizontal(lipgloss.Top, finalTableListContent, finalTableDataContent)
-	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, inputView, horizontalPanes, footerView))
+	return tea.NewView(appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, inputView, horizontalPanes, footerView)))
 }
 
 func (m *model) executeSQLQuery(query string) {
@@ -1708,23 +1831,13 @@ func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error
 	return cols, nil
 }
 
-type Dialect struct {
-	Type         string
-	TableExists  string
-	CreateInit   string
-	Insert       string
-	Update       string
-	Delete       string
-	SelectStatus string
-	ListTables   string
-	ListCols     string
-}
+type Dialect struct{ Type, TableExists, CreateInit, Insert, Update, Delete, SelectStatus, ListTables, ListCols string }
 
 func GetDialect(dbType string) Dialect {
 	switch dbType {
 	case "postgres":
 		return Dialect{
-			Type:         "postgres",
+			Type:         dbType,
 			TableExists:  "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = '_schema_migrations'",
 			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
 			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, $2)",
