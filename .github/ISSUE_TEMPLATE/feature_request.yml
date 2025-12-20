@@ -12,12 +12,6 @@ body:
       label: Describe the feature
     validations:
       required: true
-  - type: textarea
-    id: solution
-    attributes:
-      label: Example/Potential Solution
-    validations:
-      required: false
   - type: checkboxes
     id: checkboxes
     attributes:
