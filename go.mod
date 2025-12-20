@@ -11,8 +11,9 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/tliron/commonlog v0.2.21
 	github.com/tliron/glsp v0.2.2
-	github.com/tursodatabase/libsql-client-go v0.0.0-20251205113610-b69dd6e475fc
-	modernc.org/sqlite v1.40.1
+	github.com/tursodatabase/libsql-client-go v0.0.0-20251219100830-236aa1ff8acc
+	modernc.org/sqlite v1.41.0
+	turso.tech/database/tursogo v0.4.0-pre.18
 )
 
 require (
@@ -21,7 +22,7 @@ require (
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20251215102126-8518113293e1 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20251217160852-6b0c0e26fad9 // indirect
 	github.com/charmbracelet/x/ansi v0.11.3 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
@@ -31,6 +32,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/ebitengine/purego v0.9.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/iancoleman/strcase v0.3.0 // indirect
@@ -51,11 +53,11 @@ require (
 	github.com/sasha-s/go-deadlock v0.3.6 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/sourcegraph/jsonrpc2 v0.2.1 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/tliron/go-kutil v0.4.0 // indirect
+	github.com/tursodatabase/turso-go-platform-libs v0.4.0-pre.18 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9 // indirect
+	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect

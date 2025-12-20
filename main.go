@@ -24,8 +24,6 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	// "charm.land/lipgloss/v2/table"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -35,6 +33,7 @@ import (
 	"github.com/tliron/glsp/server"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
+	_ "turso.tech/database/tursogo"
 )
 
 var version = "dev"
@@ -994,6 +993,8 @@ func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
 		driverName = "mysql"
 	case "libsql":
 		driverName = "libsql"
+	case "turso":
+		driverName = "turso"
 	default:
 		return nil, "", fmt.Errorf("unsupported database type '%s' in schema '%s'", dbType, schemaFilePath)
 	}
@@ -1037,7 +1038,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 		OnUpdate          string
 	}
 	switch dbtype {
-	case "sqlite", "libsql":
+	case "sqlite", "libsql", "turso":
 		rows, err := conn.Query("SELECT sql FROM sqlite_master WHERE sql NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
 		if err != nil {
 			return fmt.Errorf("error querying sqlite: %w", err)
@@ -1882,7 +1883,7 @@ func GetDialect(dbType string) Dialect {
 			ListTables:   "SELECT tablename FROM pg_tables WHERE schemaname = 'public';",
 			ListCols:     "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;",
 		}
-	case "sqlite", "libsql":
+	case "sqlite", "libsql", "turso":
 		return Dialect{
 			Type:         dbType,
 			TableExists:  "SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'",
