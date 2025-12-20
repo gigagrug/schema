@@ -217,7 +217,7 @@ func runCreate(args []string) {
 	}
 
 	if createName == "" {
-		log.Fatal("Migration name required. Use -name or pass as argument.")
+		log.Fatal("File name required.")
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
