@@ -81,25 +81,23 @@ func main() {
 }
 
 func printHelp() {
-	fmt.Fprintf(os.Stderr, "Path: %s", os.Args[0])
-	fmt.Print(`
-Commands:
-	init       Initialize database schema and .env
-	config     Update database configuration (url, db type)
-	studio     Open the TUI database studio
-	migrate    Run pending migrations (use -file to run specific)
-	create     Create a new migration file (e.g., create -name=schema)
-	rollback   Rollback the last migration
-	remove     Remove a migration file
-	pull       Update schema file from database
-	sql        Run a raw SQL query or file
-	lsp        Start the language server
-	version    Check version
-
-Global Flags:
-	-rdir      Root directory (default "schema")
-	-dir       Migrations directory (default "migrations")
-`)
+	fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
+	fmt.Println("Commands:")
+	fmt.Println("  init         Initialize database schema.db and .env")
+	fmt.Println("  config       Update database configuration (url, db type)")
+	fmt.Println("  studio       Open the TUI database studio")
+	fmt.Println("  migrate      Run pending migrations")
+	fmt.Println("  create       Create a new migration file")
+	fmt.Println("  rollback     Rollback the last migration")
+	fmt.Println("  remove       Remove a migration file")
+	fmt.Println("  pull         Update schema.db file from database")
+	fmt.Println("  sql          Run a raw SQL query or file")
+	fmt.Println("  lsp          Start the language server")
+	fmt.Println("  version      Check version")
+	fmt.Println()
+	fmt.Println("Global Flags:")
+	fmt.Println("  -rdir        Root directory (default \"schema\")")
+	fmt.Println("  -dir         Migrations directory (default \"migrations\")")
 }
 
 func checkVersion() {
@@ -200,6 +198,8 @@ func runInit(args []string) {
 
 func runCreate(args []string) {
 	cmd := flag.NewFlagSet("create", flag.ExitOnError)
+	db := cmd.String("db", "", "update database type")
+	url := cmd.String("url", "", "update connection url")
 	dir := cmd.String("dir", "migrations", "directory path")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
@@ -220,7 +220,7 @@ func runCreate(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -282,7 +282,7 @@ func runCreate(args []string) {
 
 func runConfig(args []string) {
 	cmd := flag.NewFlagSet("config", flag.ExitOnError)
-	db := cmd.String("db", "", "update database type (sqlite, postgres, etc)")
+	db := cmd.String("db", "", "update database type")
 	url := cmd.String("url", "", "update connection url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
@@ -366,7 +366,7 @@ func runConfig(args []string) {
 
 func runStudio(args []string) {
 	cmd := flag.NewFlagSet("studio", flag.ExitOnError)
-	db := cmd.String("db", "", "database type (postgres, sqlite, etc)")
+	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "database url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
@@ -390,6 +390,8 @@ func runStudio(args []string) {
 
 func runMigrate(args []string) {
 	cmd := flag.NewFlagSet("migrate", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "connection url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 
 	var targetFile string
@@ -404,7 +406,7 @@ func runMigrate(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -531,6 +533,8 @@ func runMigrate(args []string) {
 
 func runRollback(args []string) {
 	cmd := flag.NewFlagSet("rollback", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "connection url")
 	dir := cmd.String("dir", "migrations", "migrations directory")
 	rdir := cmd.String("rdir", "schema", "root directory")
 
@@ -546,7 +550,7 @@ func runRollback(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -610,11 +614,13 @@ func runRollback(args []string) {
 
 func runPull(args []string) {
 	cmd := flag.NewFlagSet("pull", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "connection url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -628,6 +634,8 @@ func runPull(args []string) {
 
 func runRemove(args []string) {
 	cmd := flag.NewFlagSet("remove", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "connection url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
 
@@ -644,7 +652,7 @@ func runRemove(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -688,6 +696,8 @@ func runRemove(args []string) {
 
 func runSQL(args []string) {
 	cmd := flag.NewFlagSet("sql", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "database url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	dir := cmd.String("dir", "migrations", "directory")
 	cmd.Parse(args)
@@ -707,7 +717,7 @@ func runSQL(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, _, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -749,11 +759,6 @@ func runSQL(args []string) {
 			data = append(data, row)
 		}
 		fmt.Println(printTable(columns, data))
-
-		err = PullDBSchema(conn, dbtype, schemaPath)
-		if err != nil {
-			log.Fatalf("Error pulling DB schema after migration: %v\n", err)
-		}
 		return
 	}
 
@@ -799,11 +804,13 @@ func runSQL(args []string) {
 
 func runLSP(args []string) {
 	cmd := flag.NewFlagSet("lsp", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "database url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath, "", "")
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}

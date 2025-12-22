@@ -519,6 +519,7 @@ type CompletionDetail struct {
 var constraintCmp = map[string][]string{
 	"sqlite":  {"autoincrement"},
 	"libsql":  {"autoincrement"},
+	"turso":   {"autoincrement"},
 	"mysql":   {"auto_increment", "unsigned"},
 	"mariadb": {"auto_increment", "unsigned"},
 }
@@ -527,6 +528,9 @@ var dataTypeCmp = map[string][]string{
 		"dt_integer", "dt_text", "dt_blob", "dt_real", "dt_numeric",
 	},
 	"libsql": {
+		"dt_integer", "dt_text", "dt_blob", "dt_real", "dt_numeric",
+	},
+	"turso": {
 		"dt_integer", "dt_text", "dt_blob", "dt_real", "dt_numeric",
 	},
 	"postgres": {
