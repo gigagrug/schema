@@ -22,5 +22,3 @@ body:
           required: true
         - label: Read the docs.
           required: true
-        - label: Check that there isn't already an issue that reports the same feature.
-          required: true
