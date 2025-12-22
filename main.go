@@ -220,7 +220,7 @@ func runCreate(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -366,6 +366,7 @@ func runConfig(args []string) {
 
 func runStudio(args []string) {
 	cmd := flag.NewFlagSet("studio", flag.ExitOnError)
+	db := cmd.String("db", "", "database type (postgres, sqlite, etc)")
 	url := cmd.String("url", "", "database url")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
@@ -375,7 +376,7 @@ func runStudio(args []string) {
 	}
 	schemaPath := filepath.Join(*rdir, "db.schema")
 
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
@@ -403,7 +404,7 @@ func runMigrate(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -545,7 +546,7 @@ func runRollback(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -613,7 +614,7 @@ func runPull(args []string) {
 	cmd.Parse(args)
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -643,7 +644,7 @@ func runRemove(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -706,7 +707,7 @@ func runSQL(args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
@@ -802,7 +803,7 @@ func runLSP(args []string) {
 	cmd.Parse(args)
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, dbtype, err := Conn2DB(schemaPath)
+	conn, dbtype, err := Conn2DB(schemaPath, "", "")
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
@@ -916,7 +917,30 @@ func isFlagPassed(fs *flag.FlagSet, name string) bool {
 	return found
 }
 
-func Conn2DB(schemaFilePath string) (*sql.DB, string, error) {
+func Conn2DB(schemaFilePath, overrideDB, overrideURL string) (*sql.DB, string, error) {
+	if overrideDB != "" && overrideURL != "" {
+		var driverName string
+		switch overrideDB {
+		case "sqlite":
+			driverName = "sqlite"
+		case "postgres":
+			driverName = "pgx"
+		case "mysql", "mariadb":
+			driverName = "mysql"
+		case "libsql":
+			driverName = "libsql"
+		case "turso":
+			driverName = "turso"
+		default:
+			return nil, "", fmt.Errorf("unsupported database type '%s'", overrideDB)
+		}
+		conn, err := sql.Open(driverName, overrideURL)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to open DB connection: %v", err)
+		}
+		return conn, overrideDB, nil
+	}
+
 	err := godotenv.Load()
 	if err != nil {
 		return nil, "", fmt.Errorf("error loading .env file: %w", err)
@@ -1493,6 +1517,7 @@ type model struct {
 	viewportPaneHeight int
 	viewingRowDetail   bool
 	selectedRow        []string
+	tableXOffset       int
 }
 
 func initialModel(db *sql.DB, dbType string) model {
@@ -1650,6 +1675,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.viewport.SetWidth(m.viewportPaneWidth)
 						m.viewport.SetHeight(m.viewportPaneHeight)
 						m.viewport.SetContent(m.table.View())
+						m.viewport.SetXOffset(m.tableXOffset)
 						return m, nil
 					default:
 						m.viewport, cmd = m.viewport.Update(msg)
@@ -1667,7 +1693,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.viewport.SetWidth(m.width)
 						m.viewport.SetHeight(m.height)
 						m.renderDetailView()
+						m.tableXOffset = m.viewport.XOffset()
 						m.viewport.GotoTop()
+						m.viewport.SetXOffset(0)
 						return m, nil
 
 					case msg.String() == "left", msg.String() == "h":
