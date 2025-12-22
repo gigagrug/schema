@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -10,10 +11,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -38,6 +41,9 @@ import (
 var version = "dev"
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if len(os.Args) < 2 {
 		fmt.Print(`
  ____       _                          
@@ -57,19 +63,19 @@ func main() {
 	case "init":
 		runInit(os.Args[2:])
 	case "create":
-		runCreate(os.Args[2:])
+		runCreate(ctx, os.Args[2:])
 	case "migrate":
-		runMigrate(os.Args[2:])
+		runMigrate(ctx, os.Args[2:])
 	case "studio":
 		runStudio(os.Args[2:])
 	case "rollback":
-		runRollback(os.Args[2:])
+		runRollback(ctx, os.Args[2:])
 	case "remove":
-		runRemove(os.Args[2:])
+		runRemove(ctx, os.Args[2:])
 	case "pull":
-		runPull(os.Args[2:])
+		runPull(ctx, os.Args[2:])
 	case "sql":
-		runSQL(os.Args[2:])
+		runSQL(ctx, os.Args[2:])
 	case "config":
 		runConfig(os.Args[2:])
 	case "lsp":
@@ -196,7 +202,7 @@ func runInit(args []string) {
 	fmt.Println("Schema successfully initialized")
 }
 
-func runCreate(args []string) {
+func runCreate(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("create", flag.ExitOnError)
 	db := cmd.String("db", "", "update database type")
 	url := cmd.String("url", "", "update connection url")
@@ -228,7 +234,7 @@ func runCreate(args []string) {
 	dialect := GetDialect(dbtype)
 
 	if *dir == "migrations" {
-		CheckTableExists(conn, dbtype, *rdir)
+		CheckTableExists(ctx, conn, dbtype, *rdir)
 	}
 
 	dirPath := filepath.Join(*rdir, *dir)
@@ -272,7 +278,7 @@ func runCreate(args []string) {
 			log.Fatalf("Error writing template to file: %v", err)
 		}
 
-		_, err = conn.Exec(dialect.Insert, fileName, false)
+		_, err = conn.ExecContext(ctx, dialect.Insert, fileName, false)
 		if err != nil {
 			log.Fatalf("Error executing SQL: %v\n", err)
 		}
@@ -388,7 +394,7 @@ func runStudio(args []string) {
 	}
 }
 
-func runMigrate(args []string) {
+func runMigrate(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("migrate", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
@@ -412,7 +418,7 @@ func runMigrate(args []string) {
 	}
 	defer conn.Close()
 
-	CheckTableExists(conn, dbtype, *rdir)
+	CheckTableExists(ctx, conn, dbtype, *rdir)
 	dialect := GetDialect(dbtype)
 
 	migrationsDir := filepath.Join(*rdir, "migrations")
@@ -422,7 +428,8 @@ func runMigrate(args []string) {
 	}
 
 	dbMigrationFiles := make(map[string]bool)
-	rows, err := conn.Query("SELECT file FROM _schema_migrations")
+
+	rows, err := conn.QueryContext(ctx, "SELECT file FROM _schema_migrations")
 	if err != nil {
 		log.Fatalf("Error querying _schema_migrations table: %v\n", err)
 	}
@@ -438,7 +445,7 @@ func runMigrate(args []string) {
 	for _, entry := range localMigrationFiles {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
 			if _, exists := dbMigrationFiles[entry.Name()]; !exists {
-				_, err = conn.Exec(dialect.Insert, entry.Name(), false)
+				_, err = conn.ExecContext(ctx, dialect.Insert, entry.Name(), false)
 				if err != nil {
 					fmt.Printf("Warning: Could not add migration file '%s' to _schema_migrations table: %v\n", entry.Name(), err)
 				} else {
@@ -463,28 +470,37 @@ func runMigrate(args []string) {
 		sqlContent := string(sqlFile)
 		migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
 
-		_, err = conn.Exec(migrationSQL)
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
-			log.Fatalf("Error executing SQL: %v\n", err)
+			log.Fatalf("Error starting transaction: %v", err)
+		}
+		defer tx.Rollback()
+
+		_, err = tx.ExecContext(ctx, migrationSQL)
+		if err != nil {
+			log.Fatalf("Error executing SQL (rolled back): %v\n", err)
 		}
 
-		_, err = conn.Exec(dialect.Update, true, migrationFileName)
+		_, err = tx.ExecContext(ctx, dialect.Update, true, migrationFileName)
 		if err != nil {
-			log.Fatalf("Error executing SQL: %v\n", err)
+			log.Fatalf("Error updating status (rolled back): %v\n", err)
 		}
 
-		err = PullDBSchema(conn, dbtype, schemaPath)
+		if err := tx.Commit(); err != nil {
+			log.Fatalf("Error committing transaction: %v\n", err)
+		}
+
+		err = PullDBSchema(ctx, conn, dbtype, schemaPath)
 		if err != nil {
 			log.Fatalf("Error pulling DB schema after migration: %v\n", err)
 		}
 		fmt.Printf("Schema successfully migrated %s\n", migrationFileName)
 
 	} else {
-		rows, err := conn.Query(`SELECT file FROM _schema_migrations WHERE migrated = false ORDER BY id ASC`)
+		rows, err := conn.QueryContext(ctx, `SELECT file FROM _schema_migrations WHERE migrated = false ORDER BY id ASC`)
 		if err != nil {
 			log.Fatalf("Error executing SQL query for pending migrations: %v\n", err)
 		}
-		defer rows.Close()
 
 		type Files struct{ Name string }
 		files := []Files{}
@@ -496,6 +512,7 @@ func runMigrate(args []string) {
 			}
 			files = append(files, Files{Name: fName})
 		}
+		rows.Close()
 
 		if len(files) == 0 {
 			fmt.Println("No pending migrations found.")
@@ -503,26 +520,38 @@ func runMigrate(args []string) {
 		}
 
 		for _, entry := range files {
-			fileP := filepath.Join(*rdir, "migrations", entry.Name)
-			sqlFile, err := os.ReadFile(fileP)
+			err := func() error {
+				fileP := filepath.Join(*rdir, "migrations", entry.Name)
+				sqlFile, err := os.ReadFile(fileP)
+				if err != nil {
+					return fmt.Errorf("reading file: %w", err)
+				}
+
+				sqlContent := string(sqlFile)
+				migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
+
+				tx, err := conn.BeginTx(ctx, nil)
+				if err != nil {
+					return fmt.Errorf("starting transaction: %w", err)
+				}
+				defer tx.Rollback()
+
+				if _, err := tx.ExecContext(ctx, migrationSQL); err != nil {
+					return fmt.Errorf("executing migration SQL: %w", err)
+				}
+
+				if _, err := tx.ExecContext(ctx, dialect.Update, true, entry.Name); err != nil {
+					return fmt.Errorf("updating migration status: %w", err)
+				}
+
+				return tx.Commit()
+			}()
+
 			if err != nil {
-				log.Fatalf("Error reading SQL file for migration %s: %v\n", entry.Name, err)
+				log.Fatalf("Migration failed for %s: %v", entry.Name, err)
 			}
 
-			sqlContent := string(sqlFile)
-			migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
-
-			_, err = conn.Exec(migrationSQL)
-			if err != nil {
-				log.Fatalf("Error executing SQL for migration %s: %v\n", entry.Name, err)
-			}
-
-			_, err = conn.Exec(dialect.Update, true, entry.Name)
-			if err != nil {
-				log.Fatalf("Error updating migration status for %s: %v\n", entry.Name, err)
-			}
-
-			err = PullDBSchema(conn, dbtype, schemaPath)
+			err = PullDBSchema(ctx, conn, dbtype, schemaPath)
 			if err != nil {
 				log.Fatalf("Error pulling DB schema after migration %s: %v\n", entry.Name, err)
 			}
@@ -531,7 +560,7 @@ func runMigrate(args []string) {
 	}
 }
 
-func runRollback(args []string) {
+func runRollback(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("rollback", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
@@ -562,7 +591,7 @@ func runRollback(args []string) {
 
 	if targetFile == "" {
 		query := `SELECT file FROM _schema_migrations WHERE migrated = true ORDER BY id DESC LIMIT 1`
-		err := conn.QueryRow(query).Scan(&migrationFileName)
+		err := conn.QueryRowContext(ctx, query).Scan(&migrationFileName)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				log.Println("No migrations to rollback.")
@@ -573,7 +602,6 @@ func runRollback(args []string) {
 		migrationToRollback = strings.TrimSuffix(migrationFileName, ".sql")
 	} else {
 		migrationToRollback = targetFile
-		// Handle if user typed name with or without .sql extension
 		migrationToRollback = strings.TrimSuffix(migrationToRollback, ".sql")
 		migrationFileName = migrationToRollback + ".sql"
 	}
@@ -590,21 +618,29 @@ func runRollback(args []string) {
 	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 		log.Fatalf("Error: No rollback script found in %s.sql", migrationToRollback)
 	}
-
 	rollbackSQL := parts[1]
-	_, err = conn.Exec(rollbackSQL)
+
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
+		log.Fatalf("Error starting transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, rollbackSQL); err != nil {
 		log.Fatalf("Error executing rollback SQL for %s.sql: %v\n", migrationToRollback, err)
 	}
 
 	if *dir == "migrations" {
-		_, err = conn.Exec(dialect.Update, false, migrationFileName)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, dialect.Update, false, migrationFileName); err != nil {
 			log.Fatalf("Error updating migration status after rollback for %s: %v\n", migrationFileName, err)
 		}
 	}
 
-	err = PullDBSchema(conn, dbtype, schemaPath)
+	if err := tx.Commit(); err != nil {
+		log.Fatalf("Error committing rollback transaction: %v\n", err)
+	}
+
+	err = PullDBSchema(ctx, conn, dbtype, schemaPath)
 	if err != nil {
 		log.Fatalf("Error pulling DB schema after rollback: %v\n", err)
 	}
@@ -612,7 +648,7 @@ func runRollback(args []string) {
 	fmt.Printf("Successfully rolled back migration %s\n", migrationFileName)
 }
 
-func runPull(args []string) {
+func runPull(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("pull", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
@@ -626,13 +662,13 @@ func runPull(args []string) {
 	}
 	defer conn.Close()
 
-	err = PullDBSchema(conn, dbtype, schemaPath)
+	err = PullDBSchema(ctx, conn, dbtype, schemaPath)
 	if err != nil {
 		log.Fatalf("Err pulling db schema: %v\n", err)
 	}
 }
 
-func runRemove(args []string) {
+func runRemove(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("remove", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
@@ -665,7 +701,7 @@ func runRemove(args []string) {
 	}
 
 	var migrated bool
-	err = conn.QueryRow(dialect.SelectStatus, migrationFileName).Scan(&migrated)
+	err = conn.QueryRowContext(ctx, dialect.SelectStatus, migrationFileName).Scan(&migrated)
 	if err != nil && err != sql.ErrNoRows {
 		log.Fatalf("Error checking migration status for %s: %v\n", migrationFileName, err)
 	}
@@ -674,8 +710,14 @@ func runRemove(args []string) {
 		log.Fatalf("Cannot remove migration file '%s' because it has already been migrated.", migrationFileName)
 	}
 
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		log.Fatalf("Error starting transaction: %v", err)
+	}
+	defer tx.Rollback()
+
 	if err != sql.ErrNoRows {
-		_, delErr := conn.Exec(dialect.Delete, migrationFileName)
+		_, delErr := tx.ExecContext(ctx, dialect.Delete, migrationFileName)
 		if delErr != nil {
 			log.Fatalf("Failed to delete migration record for '%s' from database: %v\n", migrationFileName, delErr)
 		}
@@ -687,14 +729,20 @@ func runRemove(args []string) {
 		if os.IsNotExist(removeErr) {
 			fmt.Printf("Migration file '%s' not found on filesystem, but its database record was removed.\n", migrationFileName)
 		} else {
-			log.Fatalf("Error removing migration file '%s' from filesystem: %v\n", filePath, removeErr)
+			log.Fatalf("Error removing migration file '%s' from filesystem (DB changes rolled back): %v\n", filePath, removeErr)
 		}
-	} else {
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Fatalf("Error committing transaction: %v", err)
+	}
+
+	if removeErr == nil {
 		fmt.Printf("Successfully removed migration file '%s' and its database record.\n", migrationFileName)
 	}
 }
 
-func runSQL(args []string) {
+func runSQL(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("sql", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "database url")
@@ -729,7 +777,7 @@ func runSQL(args []string) {
 		if err != nil {
 			log.Fatalf("Error reading SQL file: %v\n", err)
 		}
-		rows, err := conn.Query(string(sqlFile))
+		rows, err := conn.QueryContext(ctx, string(sqlFile))
 		if err != nil {
 			log.Fatalf("Error executing SQL query: %v\n", err)
 		}
@@ -763,7 +811,7 @@ func runSQL(args []string) {
 	}
 
 	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(query)), "SELECT") {
-		rows, err := conn.Query(query)
+		rows, err := conn.QueryContext(ctx, query)
 		if err != nil {
 			log.Fatalf("Error executing SQL query: %v\n", err)
 		}
@@ -793,7 +841,7 @@ func runSQL(args []string) {
 		fmt.Println(printTable(columns, data))
 
 	} else {
-		result, err := conn.Exec(query)
+		result, err := conn.ExecContext(ctx, query)
 		if err != nil {
 			log.Fatalf("Error executing SQL command: %v\n", err)
 		}
@@ -852,14 +900,14 @@ func runLSP(args []string) {
 	server.RunStdio()
 }
 
-func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
+func CheckTableExists(ctx context.Context, conn *sql.DB, dbtype string, rdir string) {
 	dialect := GetDialect(dbtype)
 	if dialect.Type == "" {
 		log.Fatalf("Unsupported database type for table existence check: %s", dbtype)
 	}
 
 	var name string
-	err := conn.QueryRow(dialect.TableExists).Scan(&name)
+	err := conn.QueryRowContext(ctx, dialect.TableExists).Scan(&name)
 
 	if err == sql.ErrNoRows {
 		migrationsDir := filepath.Join(rdir, "migrations")
@@ -892,17 +940,17 @@ func CheckTableExists(conn *sql.DB, dbtype string, rdir string) {
 			log.Fatalf("Error reading SQL file: %v\n", err)
 		}
 
-		_, err = conn.Exec(string(sqlFile))
+		_, err = conn.ExecContext(ctx, string(sqlFile))
 		if err != nil {
 			log.Fatalf("Error executing SQL to create _schema_migrations table: %v\n", err)
 		}
 
-		_, err = conn.Exec(dialect.Insert, "0_init.sql", true)
+		_, err = conn.ExecContext(ctx, dialect.Insert, "0_init.sql", true)
 		if err != nil {
 			log.Fatalf("Error executing SQL to insert 0_init.sql record: %v\n", err)
 		}
 
-		err = PullDBSchema(conn, dbtype, filepath.Join(rdir, "db.schema"))
+		err = PullDBSchema(ctx, conn, dbtype, filepath.Join(rdir, "db.schema"))
 		if err != nil {
 			log.Fatalf("Migrate2: Err pulling schema %v\n", err)
 		}
@@ -1056,7 +1104,7 @@ func splitOnTopLevelCommas(s string) []string {
 	return parts
 }
 
-func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
+func PullDBSchema(ctx context.Context, conn *sql.DB, dbtype, schemaFilePath string) error {
 	var schema string
 	type ForeignKey struct {
 		ConstraintName    string
@@ -1069,7 +1117,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 	}
 	switch dbtype {
 	case "sqlite", "libsql", "turso":
-		rows, err := conn.Query("SELECT sql FROM sqlite_master WHERE sql NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
+		rows, err := conn.QueryContext(ctx, "SELECT sql FROM sqlite_master WHERE sql NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
 		if err != nil {
 			return fmt.Errorf("error querying sqlite: %w", err)
 		}
@@ -1106,7 +1154,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 		}
 		schema = strings.Join(tableSchemas, "\n\n")
 	case "postgres":
-		rows, err := conn.Query(`
+		rows, err := conn.QueryContext(ctx, `
 			SELECT
 				c.table_name,
 				c.column_name,
@@ -1212,7 +1260,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 			tableColumnsMap[tableName.String] = append(tableColumnsMap[tableName.String], columnDef)
 		}
 
-		fkRows, err := conn.Query(`
+		fkRows, err := conn.QueryContext(ctx, `
      SELECT
        kcu.table_name AS from_table,
        kcu.column_name AS from_column,
@@ -1281,7 +1329,7 @@ func PullDBSchema(conn *sql.DB, dbtype, schemaFilePath string) error {
 		}
 		schema = strings.Join(tableDefinitions, "\n\n")
 	case "mysql", "mariadb":
-		rows, err := conn.Query("SHOW TABLES")
+		rows, err := conn.QueryContext(ctx, "SHOW TABLES")
 		if err != nil {
 			return fmt.Errorf("error querying mysql tables: %w", err)
 		}
