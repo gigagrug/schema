@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -1448,9 +1447,7 @@ var (
 	titleStyle         = lipgloss.NewStyle()
 	itemStyle          = lipgloss.NewStyle().PaddingLeft(2)
 	selectedItemStyle  = lipgloss.NewStyle().PaddingLeft(0).Foreground(lipgloss.Color("170"))
-	tableStyle         = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240"))
-	tableHeaderStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Bold(true).Padding(0, 1)
-	tableSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57")).Bold(false)
+	tableSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57"))
 )
 
 type tableItem string
@@ -1492,6 +1489,10 @@ type model struct {
 	width              int
 	height             int
 	table              table.Model
+	viewportPaneWidth  int
+	viewportPaneHeight int
+	viewingRowDetail   bool
+	selectedRow        []string
 }
 
 func initialModel(db *sql.DB, dbType string) model {
@@ -1526,7 +1527,6 @@ func initialModel(db *sql.DB, dbType string) model {
 
 	t := table.New(table.WithFocused(true), table.WithHeight(7))
 	s := table.DefaultStyles()
-	s.Header = tableHeaderStyle
 	s.Selected = tableSelectedStyle
 	t.SetStyles(s)
 
@@ -1556,16 +1556,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.help.SetWidth(msg.Width)
-		inputHeight := lipgloss.Height(m.sqlTextarea.View())
-		paneHeight := m.height - inputHeight - appStyle.GetVerticalFrameSize() - 4
+		footerHeight := lipgloss.Height(footerStyle.Render(m.help.View(m.keys)))
+		mainHeight := m.height - appStyle.GetVerticalFrameSize() - footerHeight
 		listWidth := 24
-		m.sqlTextarea.SetWidth(m.width - appStyle.GetHorizontalPadding() - inputStyle.GetHorizontalPadding() - 2)
-		m.viewport.SetWidth(m.width - listWidth - tableDataPaneStyle.GetHorizontalFrameSize() - 4)
-		m.viewport.SetHeight(paneHeight)
-		m.table.SetHeight(paneHeight)
-		m.tableList.SetSize(listWidth, paneHeight)
-		if m.showingQueryResult || len(m.table.Columns()) > 0 {
-			m.viewport.SetContent(m.table.View())
+		m.tableList.SetSize(listWidth, mainHeight)
+		rightColumnWidth := m.width - listWidth - appStyle.GetHorizontalPadding()
+		inputWidth := rightColumnWidth - inputStyle.GetHorizontalFrameSize()
+		m.sqlTextarea.SetWidth(inputWidth)
+		inputHeight := lipgloss.Height(inputStyle.Render(m.sqlTextarea.View()))
+		m.viewportPaneHeight = mainHeight - inputHeight - tableDataPaneStyle.GetVerticalFrameSize()
+		m.viewportPaneWidth = rightColumnWidth - tableDataPaneStyle.GetHorizontalFrameSize()
+		m.table.SetHeight(m.viewportPaneHeight)
+		if m.viewingRowDetail {
+			m.viewport.SetWidth(m.width)
+			m.viewport.SetHeight(m.height)
+			m.renderDetailView()
+		} else {
+			m.viewport.SetWidth(m.viewportPaneWidth)
+			m.viewport.SetHeight(m.viewportPaneHeight)
+			if m.showingQueryResult || len(m.table.Columns()) > 0 {
+				m.viewport.SetContent(m.table.View())
+			}
 		}
 		return m, nil
 
@@ -1590,51 +1601,93 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-
 		if m.tableList.FilterState() == list.Filtering {
 			m.tableList, cmd = m.tableList.Update(msg)
 			return m, cmd
 		}
-
-		switch m.focusedPane {
-		case 0:
+		if m.viewingRowDetail {
 			switch {
-			case key.Matches(msg, m.keys.Clear):
-				m.sqlTextarea.SetValue("")
-			default:
-				m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
-				cmds = append(cmds, cmd)
-			}
-
-		case 1:
-			switch {
-			case key.Matches(msg, m.keys.Enter):
-				if i := m.tableList.SelectedItem(); i != nil {
-					m.selectedTable = string(i.(tableItem))
-					m.showingQueryResult = false
-					m.loadTableData(m.selectedTable)
-				}
-			}
-			m.tableList, cmd = m.tableList.Update(msg)
-			cmds = append(cmds, cmd)
-
-		case 2:
-			switch {
-			case msg.String() == "left" || msg.String() == "h":
-				m.viewport.ScrollLeft(5)
-			case msg.String() == "right" || msg.String() == "l":
-				m.viewport.ScrollRight(5)
-			case msg.String() == "up" || msg.String() == "down" || msg.String() == "k" || msg.String() == "j":
-				m.table, cmd = m.table.Update(msg)
-				cmds = append(cmds, cmd)
+			case key.Matches(msg, m.keys.Clear), key.Matches(msg, m.keys.Quit), msg.String() == "esc", msg.String() == "q":
+				m.viewingRowDetail = false
+				m.viewport.SetWidth(m.viewportPaneWidth)
+				m.viewport.SetHeight(m.viewportPaneHeight)
 				m.viewport.SetContent(m.table.View())
+				return m, nil
 			default:
 				m.viewport, cmd = m.viewport.Update(msg)
 				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		} else {
+			switch m.focusedPane {
+			case 0:
+				switch {
+				case key.Matches(msg, m.keys.Clear):
+					m.sqlTextarea.SetValue("")
+				default:
+					m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
+				}
+				cmds = append(cmds, cmd)
+
+			case 1:
+				switch {
+				case key.Matches(msg, m.keys.Enter):
+					if i := m.tableList.SelectedItem(); i != nil {
+						m.selectedTable = string(i.(tableItem))
+						m.showingQueryResult = false
+						m.loadTableData(m.selectedTable)
+					}
+				}
+				m.tableList, cmd = m.tableList.Update(msg)
+				cmds = append(cmds, cmd)
+
+			case 2:
+				if m.viewingRowDetail {
+					switch {
+					case key.Matches(msg, m.keys.Clear), key.Matches(msg, m.keys.Quit), msg.String() == "esc":
+						m.viewingRowDetail = false
+						m.selectedRow = nil
+						m.viewport.SetWidth(m.viewportPaneWidth)
+						m.viewport.SetHeight(m.viewportPaneHeight)
+						m.viewport.SetContent(m.table.View())
+						return m, nil
+					default:
+						m.viewport, cmd = m.viewport.Update(msg)
+						cmds = append(cmds, cmd)
+					}
+				} else {
+					switch {
+					case key.Matches(msg, m.keys.Enter):
+						row := m.table.SelectedRow()
+						if row == nil {
+							return m, nil
+						}
+						m.selectedRow = row
+						m.viewingRowDetail = true
+						m.viewport.SetWidth(m.width)
+						m.viewport.SetHeight(m.height)
+						m.renderDetailView()
+						m.viewport.GotoTop()
+						return m, nil
+
+					case msg.String() == "left", msg.String() == "h":
+						m.viewport.ScrollLeft(5)
+					case msg.String() == "right", msg.String() == "l":
+						m.viewport.ScrollRight(5)
+					case key.Matches(msg, m.keys.Navigation):
+						m.table, cmd = m.table.Update(msg)
+						cmds = append(cmds, cmd)
+						m.viewport.SetContent(m.table.View())
+					default:
+						m.viewport, cmd = m.viewport.Update(msg)
+						cmds = append(cmds, cmd)
+					}
+				}
 			}
 		}
 
 	default:
+		// Default updates
 		m.sqlTextarea, cmd = m.sqlTextarea.Update(msg)
 		cmds = append(cmds, cmd)
 		m.tableList, cmd = m.tableList.Update(msg)
@@ -1646,6 +1699,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() tea.View {
+	if m.viewingRowDetail {
+		v := tea.NewView(appStyle.Render(m.viewport.View()))
+		v.AltScreen = true
+		return v
+	}
+
 	var listStyle lipgloss.Style
 	dataStyle := tableDataPaneStyle
 	currentInputStyle := inputStyle
@@ -1667,83 +1726,126 @@ func (m model) View() tea.View {
 	finalTableListContent := listStyle.Render(m.tableList.View())
 	finalTableDataContent := dataStyle.Render(m.viewport.View())
 	footerView := footerStyle.Render(m.help.View(m.keys))
-	horizontalPanes := lipgloss.JoinHorizontal(lipgloss.Top, finalTableListContent, finalTableDataContent)
-	return tea.NewView(appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, inputView, horizontalPanes, footerView)))
+	rightColumn := lipgloss.JoinVertical(lipgloss.Left, inputView, finalTableDataContent)
+	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, finalTableListContent, rightColumn)
+	v := tea.NewView(appStyle.Render(lipgloss.JoinVertical(lipgloss.Left, mainContent, footerView)))
+	v.AltScreen = false
+	return v
+}
+func (m *model) renderDetailView() {
+	if len(m.selectedRow) == 0 {
+		return
+	}
+
+	headers := m.table.Columns()
+	var sb strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("229")).Underline(true)
+	sb.WriteString(titleStyle.Render("Row Details") + "\n\n")
+	wrapWidth := max(m.width-4, 10)
+
+	for i, cell := range m.selectedRow {
+		header := "Unknown"
+		if i < len(headers) {
+			header = headers[i].Title
+		}
+
+		hStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+		vStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Width(wrapWidth)
+
+		sb.WriteString(hStyle.Render(header + ":"))
+		sb.WriteString("\n")
+		sb.WriteString(vStyle.Render(cell))
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("\n(Press Esc or q to close)"))
+
+	m.viewport.SetContent(sb.String())
 }
 
 func (m *model) loadTableData(tableName string) error {
+	m.viewingRowDetail = false
 	m.queryError = nil
 	m.showingQueryResult = false
 	m.table.SetCursor(0)
 	m.viewport.GotoTop()
 	m.viewport.SetXOffset(0)
-
 	m.table.SetRows(nil)
 
-	validTables, err := getSQLTables(m.db, m.dbType)
+	rows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName))
 	if err != nil {
-		return fmt.Errorf("failed to fetch valid tables: %w", err)
+		return fmt.Errorf("failed to query data: %w", err)
 	}
-	if !slices.Contains(validTables, tableName) {
-		return fmt.Errorf("invalid table name: %s", tableName)
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("failed to get columns: %w", err)
 	}
 
-	cols, err := getSQLColumns(m.db, m.dbType, tableName)
-	if err != nil {
-		return fmt.Errorf("failed to get table columns: %w", err)
+	widths := make([]int, len(columns))
+	for i, col := range columns {
+		widths[i] = len(col)
 	}
+
+	values := make([]sql.RawBytes, len(columns))
+	scanArgs := make([]any, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	var tableRows []table.Row
+
+	for rows.Next() {
+		err = rows.Scan(scanArgs...)
+		if err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		var row []string
+		for i, colVal := range values {
+			var valStr string
+			if colVal == nil {
+				valStr = "NULL"
+			} else {
+				valStr = string(colVal)
+			}
+
+			if len(valStr) > widths[i] {
+				widths[i] = len(valStr)
+			}
+
+			row = append(row, valStr)
+		}
+		tableRows = append(tableRows, row)
+	}
+
+	const maxColWidth = 50
 
 	var tableColumns []table.Column
 	totalWidth := 0
-	for _, col := range cols {
-		w := max(len(col)+10, 10)
-		tableColumns = append(tableColumns, table.Column{Title: col, Width: w})
+
+	for i, colName := range columns {
+		w := min(widths[i], maxColWidth)
+		tableColumns = append(tableColumns, table.Column{Title: colName, Width: w})
 		totalWidth += w
 	}
-	m.table.SetColumns(tableColumns)
 
+	m.table.SetColumns(tableColumns)
+	m.table.SetRows(tableRows)
 	if totalWidth < m.viewport.Width() {
 		m.table.SetWidth(m.viewport.Width())
 	} else {
 		m.table.SetWidth(totalWidth)
 	}
 
-	dataRows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName))
-	if err != nil {
-		return fmt.Errorf("failed to query data: %w", err)
-	}
-	defer dataRows.Close()
-
-	var tableRows []table.Row
-	if len(cols) > 0 {
-		values := make([]sql.RawBytes, len(cols))
-		scanArgs := make([]any, len(values))
-		for i := range values {
-			scanArgs[i] = &values[i]
-		}
-
-		for dataRows.Next() {
-			err = dataRows.Scan(scanArgs...)
-			if err != nil {
-				return fmt.Errorf("failed to scan row: %w", err)
-			}
-			var row []string
-			for _, colVal := range values {
-				if colVal == nil {
-					row = append(row, "NULL")
-				} else {
-					row = append(row, string(colVal))
-				}
-			}
-			tableRows = append(tableRows, row)
-		}
-	}
-	m.table.SetRows(tableRows)
 	m.viewport.SetContent(m.table.View())
 	return nil
 }
 
 func (m *model) executeSQLQuery(query string) {
+	m.viewingRowDetail = false
 	m.queryError = nil
 	m.showingQueryResult = true
 	m.table.SetCursor(0)
@@ -1766,19 +1868,9 @@ func (m *model) executeSQLQuery(query string) {
 		return
 	}
 
-	var tableColumns []table.Column
-	totalWidth := 0
-	for _, col := range cols {
-		w := max(len(col)+10, 10)
-		tableColumns = append(tableColumns, table.Column{Title: col, Width: w})
-		totalWidth += w
-	}
-	m.table.SetColumns(tableColumns)
-
-	if totalWidth < m.viewport.Width() {
-		m.table.SetWidth(m.viewport.Width())
-	} else {
-		m.table.SetWidth(totalWidth)
+	widths := make([]int, len(cols))
+	for i, col := range cols {
+		widths[i] = len(col)
 	}
 
 	values := make([]sql.RawBytes, len(cols))
@@ -1797,12 +1889,19 @@ func (m *model) executeSQLQuery(query string) {
 		}
 
 		var row []string
-		for _, colVal := range values {
+		for i, colVal := range values {
+			var valStr string
 			if colVal == nil {
-				row = append(row, "NULL")
+				valStr = "NULL"
 			} else {
-				row = append(row, string(colVal))
+				valStr = string(colVal)
 			}
+
+			if len(valStr) > widths[i] {
+				widths[i] = len(valStr)
+			}
+
+			row = append(row, valStr)
 		}
 		tableRows = append(tableRows, row)
 	}
@@ -1813,7 +1912,26 @@ func (m *model) executeSQLQuery(query string) {
 		return
 	}
 
+	const maxColWidth = 50
+
+	var tableColumns []table.Column
+	totalWidth := 0
+
+	for i, colName := range cols {
+		w := min(widths[i], maxColWidth)
+		tableColumns = append(tableColumns, table.Column{Title: colName, Width: w})
+		totalWidth += w
+	}
+
+	m.table.SetColumns(tableColumns)
 	m.table.SetRows(tableRows)
+
+	if totalWidth < m.viewport.Width() {
+		m.table.SetWidth(m.viewport.Width())
+	} else {
+		m.table.SetWidth(totalWidth)
+	}
+
 	m.viewport.SetContent(m.table.View())
 }
 
