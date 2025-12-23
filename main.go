@@ -59,7 +59,7 @@ func main() {
 	case "help":
 		printHelp()
 	case "version":
-		checkVersion()
+		checkVersion(ctx)
 	case "init":
 		runInit(os.Args[2:])
 	case "create":
@@ -106,11 +106,16 @@ func printHelp() {
 	fmt.Println("  -dir         Migrations directory (default \"migrations\")")
 }
 
-func checkVersion() {
+func checkVersion(ctx context.Context) {
 	fmt.Println("Version:", version)
 
 	url := "https://api.github.com/repos/gigagrug/schema/releases/latest"
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		log.Fatalf("Error creating request: %v\n", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Fatalf("Error fetching release data from GitHub: %v\n", err)
 	}
@@ -1856,7 +1861,7 @@ func (m *model) loadTableData(tableName string) error {
 	m.viewport.SetXOffset(0)
 	m.table.SetRows(nil)
 
-	rows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName))
+	rows, err := m.db.Query(fmt.Sprintf("SELECT * FROM %s LIMIT 50;", tableName))
 	if err != nil {
 		return fmt.Errorf("failed to query data: %w", err)
 	}
