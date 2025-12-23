@@ -8,7 +8,7 @@ outline: deep
 ### Step 1
 Doesn't save in _schema_migrations table if not in migrations dir so they can be reused
 ```shell
-schema -create="insertdata" -dir="inserts"
+schema create="insertdata" -dir="inserts"
 ```
 ### Step 2
 Insert based on the SQL schema above. 
@@ -45,5 +45,5 @@ SELECT user_id, title, content FROM post_insert;
 ```
 ### Step 3
 ```shell
-schema -sql="0_insertdata.sql" -dir="inserts"
+schema sql "0_insertdata.sql" -dir="inserts"
 ```

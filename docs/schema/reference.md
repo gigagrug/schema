@@ -3,74 +3,80 @@ outline: deep
 ---
 
 # Reference
-All the flags
 
-## Flags
+## Subcommands
 
 ### Initializes
 ```shell
-schema -i
+schema i
 ```
 ### Version
 ```shell
-schema -v 
+schema v 
 ```
 ### Pull
 ```shell
-schema -pull
+schema pull
 ```
 ### Migrate
 ```shell
-schema -migrate
+schema migrate
 ```
 ```shell
-schema -migrate="sql file name"
+schema migrate "sql file name"
 ```
 ### Rollback
 ```shell
-schema -rollback
+schema rollback
 ```
 ```shell
-schema -rollback="sql file name"
+schema rollback "sql file name"
 ```
 ### SQL
 ```shell
-schema -sql="sql command"
+schema sql "sql command"
 ```
 ```shell
-schema -sql="sql file"
-```
-### DB
-```shell
-schema -db="sqlite"
-```
-### Database URL
-```shell
-schema -url="db url"
+schema sql "sql file"
 ```
 ### Create
 ```shell
-schema -create="sql file name"
+schema create "sql file name"
 ```
 ### Remove
 ```shell
-schema -remove="sql file name"
+schema remove "sql file name"
 ```
-### Directory
+### Config
 ```shell
-schema -dir="directory"
-```
-### Root Directory
-```shell
-schema -rdir="root-directory"
+schema config -db="db type" -url="db url"
 ```
 ### Studio
 ```shell
-schema -studio
+schema studio
 ```
 ![studio](../assets/studio.png)
 ### LSP
 ```shell
-schema -lsp
+schema lsp
 ```
 ![lsp](../assets/lsp.gif)
+
+## Flags
+
+### DB
+```shell
+schema [subcommand] -db="db type"
+```
+### Database URL
+```shell
+schema [subcommand] -url="db url"
+```
+### Directory
+```shell
+schema [subcommand] -dir="directory"
+```
+### Root Directory
+```shell
+schema [subcommand] -rdir="root directory"
+```

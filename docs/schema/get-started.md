@@ -9,20 +9,20 @@ The default database is sqlite
 ### Step 1
 Init project (default: db=sqlite url=./schema/dev.db) 
 ```shell
-schema -i
+schema i
 ```
 Init project using another db and url (sqlite, libsql, postrges, mysql, mariadb)
 ```shell
-schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
+schema i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
 ```
 Init project with different root directory<br>
 For sqlite the url is automatically set as whatever else the root directory is set as
 ```shell
-schema -i -rdir="schema2"
+schema i -rdir="schema2"
 ```
 ### Step 2
 Nessesary if using existing database<br>
 Schema is found in rdir/db.schema
 ```shell
-schema -pull
+schema pull
 ```

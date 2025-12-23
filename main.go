@@ -88,7 +88,7 @@ func main() {
 
 func printHelp() {
 	fmt.Fprintf(os.Stderr, "Path: %s\n", os.Args[0])
-	fmt.Println("Commands:")
+	fmt.Println("Subcommands:")
 	fmt.Println("  init         Initialize database schema.db and .env")
 	fmt.Println("  config       Update database configuration (url, db type)")
 	fmt.Println("  studio       Open the TUI database studio")
@@ -101,7 +101,9 @@ func printHelp() {
 	fmt.Println("  lsp          Start the language server")
 	fmt.Println("  version      Check version")
 	fmt.Println()
-	fmt.Println("Global Flags:")
+	fmt.Println("Flags:")
+	fmt.Println("  -db          db type (default \"sqlite\")")
+	fmt.Println("  -url         db url (default \"./schema/dev.db\")")
 	fmt.Println("  -rdir        Root directory (default \"schema\")")
 	fmt.Println("  -dir         Migrations directory (default \"migrations\")")
 }

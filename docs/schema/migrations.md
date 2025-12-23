@@ -6,7 +6,7 @@ outline: deep
 ## Step 1
 Create a SQL file
 ```shell
-schema -create="initschema"
+schema create "initschema"
 ```
 ## Step 2
 Go to ./schema/migrations/1_initschema.sql (This SQL is for sqlite)
@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS posts (
 ## Step 3
 Migrates all the sql files not migrated 
 ```shell
-schema -migrate
+schema migrate
 ```
 Migrates specific sql file
 ```shell
-schema -migrate="1_initschema"
+schema migrate "1_initschema"
 ```

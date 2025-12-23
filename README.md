@@ -1,5 +1,5 @@
 # Schema
-All in one CLI tool for the database | SQLite, libSQL, PostgreSQL, MySQL, MariaDB
+All in one CLI tool for the database | SQLite, libSQL, Turso, PostgreSQL, MySQL, MariaDB
 
 ![schema](./docs/assets/schema.png)
 
@@ -17,27 +17,27 @@ curl -sSfL https://raw.githubusercontent.com/gigagrug/schema/main/install.sh | s
 ### Step 1
 Init project (default: db=sqlite url=./schema/dev.db) 
 ```shell
-schema -i
+schema i
 ```
 Init project using another db and url
 ```shell
-schema -i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
+schema i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
 ```
 Init project with different root directory
 ```shell
-schema -i -rdir="schema2"
+schema i -rdir="schema2"
 ```
 ### Step 2
 Nessesary if using existing database
 ```shell
-schema -pull
+schema pull
 ```
 
 ## Migrations
 ### Step 1
 Create a SQL file
 ```shell
-schema -create="initschema"
+schema create "initschema"
 ```
 ### Step 2
 Go to ./schema/migrations/1_initschema.sql (This SQL is for sqlite)
@@ -65,33 +65,33 @@ DROP TABLE posts;
 ### Step 3
 Migrates all the sql files not migrated 
 ```shell
-schema -migrate
+schema migrate
 ```
 Migrates specific sql file
 ```shell
-schema -migrate="1_initschema"
+schema migrate "1_initschema"
 ```
 
 ## Rollback
 Rollbacks last migrated file
 ```shell
-schema -rollback
+schema rollback
 ```
 ```shell
-schema -rollback="1_initschema"
+schema rollback "1_initschema"
 ```
 
 ## Remove
 Removes if file not migrated
 ```shell
-schema -remove="1_initschema"
+schema remove "1_initschema"
 ```
 
 ## Insert Dummy Data
 ### Step 1
 Doesn't save in _schema_migrations table if not in migrations dir so they can be reused
 ```shell
-schema -create="insertdata" -dir="inserts"
+schema create "insertdata" -dir="inserts"
 ```
 ### Step 2
 Insert based on the SQL schema above. 
@@ -128,41 +128,51 @@ SELECT user_id, title, content FROM post_insert;
 ```
 ### Step 3
 ```shell
-schema -sql="0_insertdata.sql" -dir="inserts"
+schema sql "0_insertdata.sql" -dir="inserts"
 ```
 
 ## Select query and prints table in console
 ```shell
-schema -sql="SELECT * FROM users"
+schema sql "SELECT * FROM users"
 ```
 ![table](./docs/assets/table.png)
 
 ## TUI SQL Studio
 ```shell
-schema -studio
+schema studio
 ```
 ![studio](./docs/assets/studio.png)
 
 ## LSP
 ```shell
-schema -lsp
+schema lsp
 ```
 ![lsp](./docs/assets/lsp.gif)
 
-## Flags
-`v`: Shows current and latest version <br>
-`i`: Initializes project<br>
+## Headless
+If you don't want to use .env and schema.db
+Example:
+```shell
+schema studio -db="sqlite" -url="./schema/dev.db"
+```
+
+## Subcommands
+`version`, `v`: Shows current and latest version <br>
+`init`, `i`: Initializes project<br>
 `pull`: Pulls database schema <br>
 `migrate`: Migrates pending migrations <br>
 `rollback`: Rollbacks last migration <br>
 `studio`: Launch SQL TUI Studio<br>
 `lsp`: Connect to your editor <br>
-`rollback="[filename]"` Rollback a specific migration <br>
-`migrate="[filename under migrations/]"` Run a specific migration <br>
-`sql="[filename or sql query]"` Run SQL directly or from a file <br>
-`create="[filename]"`: Create a new migration file <br>
-`remove="[filename]"`: Remove an unmigrated file from disk and db <br>
-`db="[sqlite, libsql, postgres, mysql, mariadb]"` (default sqlite) <br>
-`url="[database url]"` (default ./schema/dev.db) <br>
+`rollback "[filename]"` Rollback a specific migration <br>
+`migrate "[filename under migrations/]"` Run a specific migration <br>
+`sql "[filename or sql query]"` Run SQL directly or from a file <br>
+`create "[filename]"`: Create a new migration file <br>
+`remove "[filename]"`: Remove an unmigrated file from disk and db <br>
+`config`: Edit config files for db type and db url<br>
+
+## Flags
+`db="[db type]"` (default sqlite) <br>
+`url="[db url]"` (default ./schema/dev.db) <br>
 `dir="[dir under rdir]"` (default migration) <br>
 `rdir="[root directory]"` (default schema)

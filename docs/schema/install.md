@@ -24,5 +24,5 @@ schema
 ## Version
 You will get your installed version and the lasted version avaiable
 ```shell
-schema -v
+schema v
 ```
