@@ -56,11 +56,11 @@ func main() {
 	}
 
 	switch os.Args[1] {
-	case "help":
+	case "help", "h":
 		printHelp()
-	case "version":
+	case "version", "v":
 		checkVersion(ctx)
-	case "init":
+	case "init", "i":
 		runInit(os.Args[2:])
 	case "create":
 		runCreate(ctx, os.Args[2:])
