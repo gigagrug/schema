@@ -91,7 +91,7 @@ schema remove "1_initschema"
 ### Step 1
 Doesn't save in _schema_migrations table if not in migrations dir so they can be reused
 ```shell
-schema create "insertdata" -dir="inserts"
+schema create "insertdata" -dir "inserts"
 ```
 ### Step 2
 Insert based on the SQL schema above. 
