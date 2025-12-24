@@ -21,11 +21,11 @@ schema i
 ```
 Init project using another db and url
 ```shell
-schema i -db="postgres" -url="postgresql://postgres:postgres@localhost:5432/postgres"
+schema i -db "postgres" -url "postgresql://postgres:postgres@localhost:5432/postgres"
 ```
 Init project with different root directory
 ```shell
-schema i -rdir="schema2"
+schema i -rdir "schema2"
 ```
 ### Step 2
 Nessesary if using existing database
@@ -128,18 +128,18 @@ SELECT user_id, title, content FROM post_insert;
 ```
 ### Step 3
 ```shell
-schema sql "0_insertdata.sql" -dir="inserts"
+schema sql "0_insertdata.sql" -dir "inserts"
 ```
 
 ## Select query and prints table in console
 ```shell
-schema sql "SELECT * FROM users"
+schema sql "SELECT * FROM users;"
 ```
 ![table](./docs/assets/table.png)
 
 ## TUI SQL Studio
 ```shell
-schema studio
+schema studio
 ```
 ![studio](./docs/assets/studio.png)
 
@@ -153,7 +153,7 @@ schema lsp
 If you don't want to use .env and schema.db
 Example:
 ```shell
-schema studio -db="sqlite" -url="./schema/dev.db"
+schema studio -db "sqlite" -url "./schema/dev.db"
 ```
 
 ## Subcommands
