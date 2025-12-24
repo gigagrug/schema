@@ -168,7 +168,7 @@ schema studio -db="sqlite" -url="./schema/dev.db"
 `migrate "[filename under migrations/]"` Run a specific migration <br>
 `sql "[filename or sql query]"` Run SQL directly or from a file <br>
 `create "[filename]"`: Create a new migration file <br>
-`remove "[filename]"`: Remove an unmigrated file from disk and db <br>
+`remove "[filename]"`, `rm`: Remove an unmigrated file from disk and db <br>
 `config`: Edit config files for db type and db url<br>
 
 ## Flags

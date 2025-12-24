@@ -70,7 +70,7 @@ func main() {
 		runStudio(os.Args[2:])
 	case "rollback":
 		runRollback(ctx, os.Args[2:])
-	case "remove":
+	case "remove", "rm":
 		runRemove(ctx, os.Args[2:])
 	case "pull":
 		runPull(ctx, os.Args[2:])
