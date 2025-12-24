@@ -1,6 +1,6 @@
 module schema
 
-go 1.25.3
+go 1.25.5
 
 require (
 	charm.land/bubbles/v2 v2.0.0-rc.1

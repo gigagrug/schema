@@ -814,6 +814,7 @@ func runSQL(ctx context.Context, args []string) {
 			data = append(data, row)
 		}
 		fmt.Println(printTable(columns, data))
+		fmt.Printf("SQL file executed successfully: %s\n", query)
 		return
 	}
 
