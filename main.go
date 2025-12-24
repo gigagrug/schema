@@ -1529,6 +1529,7 @@ var (
 	tableListPaneStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, true, false, false).BorderForeground(lipgloss.Color("240"))
 	tableDataPaneStyle = lipgloss.NewStyle().PaddingLeft(1)
 	errorStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	successStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	footerStyle        = lipgloss.NewStyle().MarginTop(1).Padding(0, 1)
 	titleStyle         = lipgloss.NewStyle()
 	itemStyle          = lipgloss.NewStyle().PaddingLeft(2)
@@ -2022,7 +2023,8 @@ func (m *model) executeSQLQuery(query string) {
 		m.table.SetWidth(totalWidth)
 	}
 
-	m.viewport.SetContent(m.table.View())
+	successMsg := successStyle.Render("Query executed successfully")
+	m.viewport.SetContent(successMsg + "\n" + m.table.View())
 }
 
 func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
