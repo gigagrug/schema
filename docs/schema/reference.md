@@ -55,7 +55,7 @@ schema config -db="db type" -url="db url"
 ```shell
 schema studio
 ```
-![studio](../assets/studio.png)
+![studio](../assets/studio.gif)
 ### LSP
 ```shell
 schema lsp

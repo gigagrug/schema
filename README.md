@@ -141,7 +141,7 @@ schema sql "SELECT * FROM users;"
 ```shell
 schema studio
 ```
-![studio](./docs/assets/studio.png)
+![studio](./docs/assets/studio.gif)
 
 ## LSP
 ```shell
