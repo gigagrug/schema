@@ -8,7 +8,7 @@ services:
     ports:
       - 5432:5432
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/18/data
   mysql:
     image: mysql:latest
     environment:
@@ -37,5 +37,5 @@ volumes:
   mariadb-data:
 # Database URLs (for application configuration):
 #  - PostgreSQL: postgresql://postgres:postgres@localhost:5432/postgres
-#  - MySQL:     myuser:mypassword@tcp(127.0.0.1:3306)/mydatabase
-#  - MariaDB:   myuser:mypassword@tcp(127.0.0.1:3307)/mydatabase
+#  - MySQL:     myuser:mypassword@tcp(127.0.0.1:3306)/mydatabase?multiStatements=true
+#  - MariaDB:   myuser:mypassword@tcp(127.0.0.1:3307)/mydatabase?multiStatements=true
