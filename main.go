@@ -1113,266 +1113,11 @@ func splitOnTopLevelCommas(s string) []string {
 }
 
 func PullDBSchema(ctx context.Context, conn *sql.DB, dbtype, schemaFilePath string) error {
-	var schema string
-	type ForeignKey struct {
-		ConstraintName    string
-		TableName         string
-		ColumnName        string
-		ForeignTableName  string
-		ForeignColumnName string
-		OnDelete          string
-		OnUpdate          string
+	dbSchema, err := InspectSchema(ctx, conn, dbtype)
+	if err != nil {
+		return fmt.Errorf("error inspecting schema: %w", err)
 	}
-	switch dbtype {
-	case "sqlite", "libsql", "turso":
-		rows, err := conn.QueryContext(ctx, "SELECT sql FROM sqlite_master WHERE sql NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_schema_migrations'")
-		if err != nil {
-			return fmt.Errorf("error querying sqlite: %w", err)
-		}
-		defer rows.Close()
-
-		var tableSchemas []string
-		for rows.Next() {
-			var createStmt string
-			if err := rows.Scan(&createStmt); err != nil {
-				return fmt.Errorf("error scanning sqlite row: %w", err)
-			}
-			formattedStmt := strings.Replace(createStmt, "CREATE TABLE ", "table ", 1)
-			formattedStmt = strings.Replace(formattedStmt, "CREATE UNIQUE INDEX", "UNIQUE", 1)
-			formattedStmt = strings.Replace(formattedStmt, "CREATE INDEX", "INDEX", 1)
-
-			if strings.Contains(formattedStmt, "(") {
-				openParen := strings.Index(formattedStmt, "(")
-				closeParen := strings.LastIndex(formattedStmt, ")")
-
-				if openParen != -1 && closeParen > openParen {
-					tableNamePart := formattedStmt[:openParen+1]
-					columnsPart := formattedStmt[openParen+1 : closeParen]
-					restOfStmt := formattedStmt[closeParen:]
-					columnDefs := splitOnTopLevelCommas(columnsPart)
-
-					for i, colDef := range columnDefs {
-						columnDefs[i] = "\t" + strings.TrimSpace(colDef)
-					}
-					formattedColumns := strings.Join(columnDefs, ",\n")
-					formattedStmt = tableNamePart + "\n" + formattedColumns + "\n" + restOfStmt
-				}
-			}
-			tableSchemas = append(tableSchemas, formattedStmt)
-		}
-		schema = strings.Join(tableSchemas, "\n\n")
-	case "postgres":
-		rows, err := conn.QueryContext(ctx, `
-			SELECT
-				c.table_name,
-				c.column_name,
-				c.data_type,
-				c.udt_name,
-				c.character_maximum_length,
-				c.is_nullable,
-				pg_get_expr(ad.adbin, ad.adrelid) AS column_default,
-				EXISTS (
-					SELECT 1
-					FROM information_schema.table_constraints tc
-					JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
-					WHERE tc.table_schema = c.table_schema
-					AND tc.table_name = c.table_name
-					AND ccu.column_name = c.column_name
-					AND tc.constraint_type = 'PRIMARY KEY'
-				) AS is_primary_key,
-				EXISTS (
-					SELECT 1
-					FROM information_schema.table_constraints tc
-					JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
-					WHERE tc.table_schema = c.table_schema
-					AND tc.table_name = c.table_name
-					AND ccu.column_name = c.column_name
-					AND tc.constraint_type = 'UNIQUE'
-				) AS is_unique
-			FROM
-				information_schema.columns c
-			LEFT JOIN
-				pg_attribute a ON a.attrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = c.table_schema))
-				AND a.attname = c.column_name
-			LEFT JOIN
-				pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
-			WHERE
-				c.table_schema = 'public'
-			ORDER BY
-				c.table_name, c.ordinal_position;
-		`)
-		if err != nil {
-			return fmt.Errorf("error querying postgres information_schema: %w", err)
-		}
-		defer rows.Close()
-
-		var currentTable string
-		tableColumnsMap := make(map[string][]string)
-		tableOrder := []string{}
-
-		for rows.Next() {
-			var tableName, columnName, dataType, udtName, isNullable, columnDefault sql.NullString
-			var characterMaximumLength sql.NullInt64
-			var isPrimaryKey bool
-			var isUnque bool
-
-			if err := rows.Scan(&tableName, &columnName, &dataType, &udtName, &characterMaximumLength, &isNullable, &columnDefault, &isPrimaryKey, &isUnque); err != nil {
-				return fmt.Errorf("error scanning postgres row: %w", err)
-			}
-
-			if !tableName.Valid || tableName.String == "_schema_migrations" {
-				continue
-			}
-
-			if tableName.String != currentTable {
-				if _, exists := tableColumnsMap[tableName.String]; !exists {
-					tableOrder = append(tableOrder, tableName.String)
-				}
-				currentTable = tableName.String
-			}
-
-			if !columnName.Valid {
-				continue
-			}
-
-			columnDef := fmt.Sprintf("  %s", columnName.String)
-
-			displayType := dataType.String
-			if udtName.Valid {
-				if (udtName.String == "int4" || udtName.String == "int8") && columnDefault.Valid && strings.Contains(columnDefault.String, "nextval(") {
-					displayType = "SERIAL"
-				} else if dataType.String == "character varying" && characterMaximumLength.Valid {
-					displayType = fmt.Sprintf("VARCHAR(%d)", characterMaximumLength.Int64)
-				} else if dataType.String == "character" && characterMaximumLength.Valid {
-					displayType = fmt.Sprintf("CHAR(%d)", characterMaximumLength.Int64)
-				} else if dataType.String == "text" {
-					displayType = "TEXT"
-				}
-			}
-
-			columnDef += fmt.Sprintf(" %s", displayType)
-			if isNullable.Valid && isNullable.String == "NO" {
-				columnDef += " NOT NULL"
-			}
-			if columnDefault.Valid && columnDefault.String != "" && !strings.Contains(columnDefault.String, "nextval(") {
-				defaultValue := columnDefault.String
-				defaultValue = strings.Split(defaultValue, "::")[0]
-				columnDef += fmt.Sprintf(" DEFAULT %s", defaultValue)
-			}
-			if isPrimaryKey {
-				columnDef += " PRIMARY KEY"
-			}
-			if isUnque {
-				columnDef += " UNIQUE"
-			}
-			tableColumnsMap[tableName.String] = append(tableColumnsMap[tableName.String], columnDef)
-		}
-
-		fkRows, err := conn.QueryContext(ctx, `
-     SELECT
-       kcu.table_name AS from_table,
-       kcu.column_name AS from_column,
-       ccu.table_name AS to_table,
-       ccu.column_name AS to_column,
-       rc.delete_rule,
-       rc.update_rule
-     FROM
-       information_schema.table_constraints AS tc
-       JOIN information_schema.key_column_usage AS kcu
-         ON tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-       JOIN information_schema.referential_constraints AS rc
-         ON tc.constraint_name = rc.constraint_name
-         AND tc.table_schema = rc.constraint_schema
-       JOIN information_schema.constraint_column_usage AS ccu
-         ON rc.unique_constraint_name = ccu.constraint_name
-         AND rc.constraint_schema = ccu.constraint_schema
-     WHERE tc.constraint_type = 'FOREIGN KEY'
-     AND tc.table_schema = 'public'
-     ORDER BY from_table, from_column;
-`)
-		if err != nil {
-			return fmt.Errorf("error querying postgres foreign keys: %w", err)
-		}
-		defer fkRows.Close()
-
-		foreignKeys := make(map[string][]ForeignKey)
-		for fkRows.Next() {
-			var fk ForeignKey
-			if err := fkRows.Scan(&fk.TableName, &fk.ColumnName, &fk.ForeignTableName, &fk.ForeignColumnName, &fk.OnDelete, &fk.OnUpdate); err != nil {
-				return fmt.Errorf("error scanning foreign key row: %w", err)
-			}
-			if fk.TableName != "_schema_migrations" {
-				foreignKeys[fk.TableName] = append(foreignKeys[fk.TableName], fk)
-			}
-		}
-
-		var tableDefinitions []string
-		for _, tableName := range tableOrder {
-			if tableName == "_schema_migrations" {
-				continue
-			}
-			columns := tableColumnsMap[tableName]
-			var columnList []string
-			for _, columnDef := range columns {
-				parts := strings.Fields(columnDef)
-				columnName := parts[0]
-				if fks, ok := foreignKeys[tableName]; ok {
-					for _, fk := range fks {
-						if fk.ColumnName == columnName {
-							columnDef = fmt.Sprintf("  %s %s REFERENCES %s(%s)",
-								fk.ColumnName, parts[1], fk.ForeignTableName, fk.ForeignColumnName)
-							if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
-								columnDef += fmt.Sprintf(" ON DELETE %s", fk.OnDelete)
-							}
-							if fk.OnUpdate != "" && fk.OnUpdate != "NO ACTION" {
-								columnDef += fmt.Sprintf(" ON UPDATE %s", fk.OnUpdate)
-							}
-						}
-					}
-				}
-				columnList = append(columnList, columnDef)
-			}
-			tableDefinitions = append(tableDefinitions, fmt.Sprintf("table %s (\n%s\n)", tableName, strings.Join(columnList, ",\n")))
-		}
-		schema = strings.Join(tableDefinitions, "\n\n")
-	case "mysql", "mariadb":
-		rows, err := conn.QueryContext(ctx, "SHOW TABLES")
-		if err != nil {
-			return fmt.Errorf("error querying mysql tables: %w", err)
-		}
-		defer rows.Close()
-
-		var tableNames []string
-		for rows.Next() {
-			var tableName string
-			if err := rows.Scan(&tableName); err != nil {
-				return fmt.Errorf("error scanning mysql table name: %s, %v", tableName, err)
-			}
-			tableNames = append(tableNames, tableName)
-		}
-
-		var tableSchemas []string
-		re := regexp.MustCompile(`\s*ENGINE=InnoDB.*(?:DEFAULT)?\s*CHARSET=[^\s]+(?: COLLATE=[^\s]+)?;?`)
-
-		for _, tableName := range tableNames {
-			if tableName == "_schema_migrations" {
-				continue
-			}
-			var createTableSQL, dummyTableName string
-			row := conn.QueryRow(fmt.Sprintf("SHOW CREATE TABLE %s", tableName))
-			if err := row.Scan(&dummyTableName, &createTableSQL); err != nil {
-				return fmt.Errorf("error getting SHOW CREATE TABLE for %s: %w", tableName, err)
-			}
-			createTableSQL = strings.ReplaceAll(createTableSQL, "`", "")
-			modifiedStmt := strings.Replace(createTableSQL, "CREATE TABLE ", "table ", 1)
-			modifiedStmt = re.ReplaceAllString(modifiedStmt, "")
-			tableSchemas = append(tableSchemas, modifiedStmt)
-		}
-		schema = strings.Join(tableSchemas, "\n\n")
-	default:
-		return fmt.Errorf("PullDBSchema: unsupported database type: %s", dbtype)
-	}
+	schema := generateSchemaString(dbSchema)
 
 	newSchemaContent := strings.ReplaceAll(schema, "\r\n", "\n")
 	newSchemaContent = strings.ReplaceAll(newSchemaContent, "\r", "")
@@ -1394,7 +1139,10 @@ func PullDBSchema(ctx context.Context, conn *sql.DB, dbtype, schemaFilePath stri
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "db") || strings.HasPrefix(line, "url") || !foundSchemaStart {
-			if !strings.Contains(line, "CREATE TABLE") && !strings.Contains(line, "table ") && !strings.Contains(line, "PRIMARY KEY") {
+			if !strings.Contains(line, "CREATE TABLE") &&
+				!strings.Contains(line, "table ") &&
+				!strings.Contains(line, "enum ") &&
+				!strings.Contains(line, "PRIMARY KEY") {
 				configLines = append(configLines, line)
 			} else {
 				foundSchemaStart = true
@@ -1430,6 +1178,135 @@ func PullDBSchema(ctx context.Context, conn *sql.DB, dbtype, schemaFilePath stri
 
 	fmt.Printf("Database schema written to %s\n", schemaFilePath)
 	return nil
+}
+
+func generateSchemaString(db *Database) string {
+	var sections []string
+
+	for i := len(db.Tables) - 1; i >= 0; i-- {
+		t := db.Tables[i]
+
+		if t.Name == "_schema_migrations" {
+			continue
+		}
+
+		pks := make(map[string]bool)
+		fks := make(map[string]Constraint)
+		uniques := make(map[string]bool)
+		var checks []Constraint
+
+		for _, c := range t.Constraints {
+			if len(c.Columns) == 1 && c.Kind != Check {
+				colName := c.Columns[0]
+				switch c.Kind {
+				case PrimaryKey:
+					pks[colName] = true
+				case ForeignKey:
+					fks[colName] = c
+				case Unique:
+					uniques[colName] = true
+				}
+			}
+			if c.Kind == Check {
+				checks = append(checks, c)
+			}
+		}
+
+		var tableLines []string
+
+		for _, col := range t.Columns {
+			colType := col.Type
+			defVal := col.DefaultValue
+
+			if strings.HasPrefix(defVal, "nextval(") {
+				switch colType {
+				case "INTEGER", "INT", "INT4":
+					colType = "SERIAL"
+					defVal = ""
+				case "BIGINT", "INT8":
+					colType = "BIGSERIAL"
+					defVal = ""
+				}
+			}
+
+			if col.IsAutoIncrement && db.Name == "sqlite" {
+				if colType == "INTEGER" {
+					colType = "INTEGER PRIMARY KEY AUTOINCREMENT"
+					pks[col.Name] = false
+					defVal = ""
+				}
+			}
+
+			if col.IsAutoIncrement && db.Name == "mysql" {
+				switch colType {
+				case "BIGINT":
+					colType = "BIGSERIAL"
+					defVal = ""
+				case "INTEGER", "INT":
+					colType = "SERIAL"
+					defVal = ""
+				}
+			}
+
+			line := fmt.Sprintf("  %s %s", col.Name, colType)
+
+			if !col.IsNullable {
+				line += " NOT NULL"
+			}
+
+			if pks[col.Name] {
+				line += " PRIMARY KEY"
+			}
+
+			if uniques[col.Name] {
+				line += " UNIQUE"
+			}
+
+			if defVal != "" {
+				val := strings.Split(defVal, "::")[0]
+				line += fmt.Sprintf(" DEFAULT %s", val)
+			}
+
+			if fk, ok := fks[col.Name]; ok {
+				line += fmt.Sprintf(" REFERENCES %s(%s)", fk.ReferenceTable, fk.ReferenceColumns[0])
+				if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
+					line += fmt.Sprintf(" ON DELETE %s", fk.OnDelete)
+				}
+				if fk.OnUpdate != "" && fk.OnUpdate != "NO ACTION" {
+					line += fmt.Sprintf(" ON UPDATE %s", fk.OnUpdate)
+				}
+			}
+
+			tableLines = append(tableLines, line)
+		}
+
+		for _, c := range checks {
+			if c.Name != "" {
+				tableLines = append(tableLines, fmt.Sprintf("  CONSTRAINT %s CHECK (%s)", c.Name, c.CheckExpression))
+			} else {
+				tableLines = append(tableLines, fmt.Sprintf("  CHECK (%s)", c.CheckExpression))
+			}
+		}
+
+		for _, idx := range t.Indexes {
+			if idx.IsUnique && uniques[idx.Columns[0]] && len(idx.Columns) == 1 {
+				continue
+			}
+			tableLines = append(tableLines, fmt.Sprintf("  INDEX %s (%s)", idx.Name, strings.Join(idx.Columns, ", ")))
+		}
+
+		tableDef := fmt.Sprintf("table %s (\n%s\n)", t.Name, strings.Join(tableLines, ",\n"))
+		sections = append(sections, tableDef)
+	}
+
+	for _, e := range db.Enums {
+		values := make([]string, len(e.Values))
+		for i, v := range e.Values {
+			values[i] = fmt.Sprintf("'%s'", v)
+		}
+		sections = append(sections, fmt.Sprintf("enum %s (\n  %s\n)", e.Name, strings.Join(values, ",\n  ")))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func truncate(s string, max int) string {
@@ -2076,48 +1953,4 @@ func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error
 		return nil, fmt.Errorf("rows iteration error on getSQLColumns (%s): %w", dbType, err)
 	}
 	return cols, nil
-}
-
-type Dialect struct{ Type, TableExists, CreateInit, Insert, Update, Delete, SelectStatus, ListTables, ListCols string }
-
-func GetDialect(dbType string) Dialect {
-	switch dbType {
-	case "postgres":
-		return Dialect{
-			Type:         dbType,
-			TableExists:  "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = '_schema_migrations'",
-			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id SERIAL PRIMARY KEY, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
-			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES ($1, $2)",
-			Update:       "UPDATE _schema_migrations SET migrated = $1 WHERE file = $2",
-			Delete:       "DELETE FROM _schema_migrations WHERE file = $1",
-			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = $1",
-			ListTables:   "SELECT tablename FROM pg_tables WHERE schemaname = 'public';",
-			ListCols:     "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position;",
-		}
-	case "sqlite", "libsql", "turso":
-		return Dialect{
-			Type:         dbType,
-			TableExists:  "SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'",
-			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
-			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES (?, ?)",
-			Update:       "UPDATE _schema_migrations SET migrated = ? WHERE file = ?",
-			Delete:       "DELETE FROM _schema_migrations WHERE file = ?",
-			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = ?",
-			ListTables:   "SELECT name FROM sqlite_master WHERE type='table';",
-			ListCols:     "SELECT name FROM PRAGMA_TABLE_INFO(?);",
-		}
-	case "mysql", "mariadb":
-		return Dialect{
-			Type:         dbType,
-			TableExists:  "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '_schema_migrations'",
-			CreateInit:   "CREATE TABLE IF NOT EXISTS _schema_migrations (\n  id INT PRIMARY KEY AUTO_INCREMENT, \n  file VARCHAR(255) UNIQUE,\n  migrated BOOLEAN DEFAULT false\n);",
-			Insert:       "INSERT INTO _schema_migrations (file, migrated) VALUES (?, ?)",
-			Update:       "UPDATE _schema_migrations SET migrated = ? WHERE file = ?",
-			Delete:       "DELETE FROM _schema_migrations WHERE file = ?",
-			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = ?",
-			ListTables:   "SHOW TABLES;",
-			ListCols:     "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? ORDER BY ordinal_position;",
-		}
-	}
-	return Dialect{}
 }
