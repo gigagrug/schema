@@ -10,6 +10,7 @@ import (
 	_ "github.com/tliron/commonlog/simple"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
+	"vitess.io/vitess/go/vt/sqlparser"
 )
 
 const lspName = "Schema"
@@ -26,7 +27,7 @@ var (
 func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
 	capabilities := handler.CreateServerCapabilities()
 	capabilities.CompletionProvider = &protocol.CompletionOptions{
-		TriggerCharacters: []string{",", ".", " "},
+		TriggerCharacters: []string{",", ".", " ", "(", "\"", "="},
 	}
 	capabilities.TextDocumentSync = protocol.TextDocumentSyncOptions{
 		Change: ptr(protocol.TextDocumentSyncKindFull),
@@ -99,6 +100,153 @@ func textDocumentDidSave(context *glsp.Context, params *protocol.DidSaveTextDocu
 	return nil
 }
 
+func extractTablesAST(sqlContent string) []string {
+	stmts, err := sqlparser.NewTestParser().ParseMultiple(sqlContent)
+	if err == nil {
+		var tables []string
+		visit := func(node sqlparser.SQLNode) (bool, error) {
+			switch n := node.(type) {
+			case *sqlparser.TableName:
+				if !n.IsEmpty() {
+					tables = append(tables, n.Name.String())
+				}
+			}
+			return true, nil
+		}
+		for _, stmt := range stmts {
+			_ = sqlparser.Walk(visit, stmt)
+		}
+		return tables
+	}
+
+	tokenizer := sqlparser.NewTestParser().NewStringTokenizer(sqlContent)
+	var tables []string
+
+	state := 0
+
+	for {
+		typ, val := tokenizer.Scan()
+		if typ == 0 { // EOF
+			break
+		}
+
+		switch typ {
+		case sqlparser.FROM, sqlparser.JOIN, sqlparser.UPDATE, sqlparser.INTO:
+			state = 1
+		case sqlparser.AS:
+			// If we just saw a table (state 2), 'AS' means next token is definitely an alias
+			if state == 2 {
+				state = 1 // Go back to expecting an ID
+			} else {
+				state = 0
+			}
+		case sqlparser.ID:
+			switch state {
+			case 1:
+				// Found a table (or alias after AS)
+				tables = append(tables, val)
+				state = 2 // Next token might be an implicit alias
+			case 2:
+				// Found an implicit alias (e.g. "projects p")
+				tables = append(tables, val)
+				state = 0
+			default:
+				state = 0
+			}
+		case 44: // Comma
+			// In a FROM clause list (FROM a, b), a comma effectively resets to expecting a table.
+			// Roughly assuming if we were in a table-context, comma means more tables.
+			if state == 2 {
+				state = 1
+			} else {
+				state = 0
+			}
+		default:
+			// Any other keyword (WHERE, ON, SET, etc) resets the state
+			state = 0
+		}
+	}
+
+	return tables
+}
+
+func extractTableAliases(sqlContent string) map[string]string {
+	tokenizer := sqlparser.NewTestParser().NewStringTokenizer(sqlContent)
+	tables := make(map[string]string)
+
+	// State: 0=Idle, 1=ExpectTable, 2=ExpectAliasOrAs
+	state := 0
+	var lastRealTable string
+
+	for {
+		typ, val := tokenizer.Scan()
+		if typ == 0 { // EOF
+			break
+		}
+
+		switch typ {
+		case sqlparser.FROM, sqlparser.JOIN, sqlparser.UPDATE, sqlparser.INTO:
+			state = 1
+		case sqlparser.AS:
+			// If we just saw a table (state 2), 'AS' means next token is definitely an alias
+			if state == 2 {
+				state = 1 // Go back to expecting an ID (the alias)
+			} else {
+				state = 0
+			}
+		case sqlparser.ID:
+			switch state {
+			case 1:
+				// Found a real table name
+				lastRealTable = val
+				tables[val] = val // Map table name to itself
+				state = 2         // Next token might be an alias
+			case 2:
+				// Found an alias (e.g. "projects p")
+				tables[val] = lastRealTable // Map alias 'p' to 'projects'
+				state = 0
+			default:
+				state = 0
+			}
+		case 44: // Comma (ASCII 44)
+			// In FROM clause lists (FROM a, b), comma resets to expecting a table
+			if state == 2 {
+				state = 1
+			} else {
+				state = 0
+			}
+		default:
+			state = 0
+		}
+	}
+	return tables
+}
+
+func isTableCompletionContext(textBeforeCursor string) bool {
+	tokenizer := sqlparser.NewTestParser().NewStringTokenizer(textBeforeCursor)
+	var lastToken int
+	var secondLastToken int
+	for {
+		typ, _ := tokenizer.Scan()
+		if typ == 0 {
+			break
+		}
+		secondLastToken = lastToken
+		lastToken = typ
+	}
+	switch lastToken {
+	case sqlparser.FROM, sqlparser.UPDATE, sqlparser.INTO, sqlparser.TABLE, sqlparser.JOIN, sqlparser.ON:
+		return true
+	}
+	if lastToken == sqlparser.ID {
+		switch secondLastToken {
+		case sqlparser.FROM, sqlparser.JOIN, sqlparser.ON, sqlparser.UPDATE, sqlparser.INTO:
+			return true
+		}
+	}
+	return false
+}
+
 func isolateCurrentStatement(content string, offset int) string {
 	start := strings.LastIndex(content[:offset], ";")
 	if start == -1 {
@@ -137,6 +285,7 @@ func splitOnTopCommas(s string) []string {
 	result = append(result, strings.TrimSpace(s[lastSplit:]))
 	return result
 }
+
 func formatSql(content string) (string, error) {
 	var statements []string
 	var currentStatement strings.Builder
@@ -197,7 +346,27 @@ func formatSql(content string) (string, error) {
 		}
 		formattedStatements = append(formattedStatements, formatted+";")
 	}
-	return strings.Join(formattedStatements, "\n\n"), nil
+
+	if len(formattedStatements) == 0 {
+		return "", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(formattedStatements[0])
+
+	for i := 1; i < len(formattedStatements); i++ {
+		prev := strings.ToUpper(strings.TrimSpace(formattedStatements[i-1]))
+		curr := strings.ToUpper(strings.TrimSpace(formattedStatements[i]))
+
+		if strings.HasPrefix(prev, "DROP") && strings.HasPrefix(curr, "DROP") {
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString(formattedStatements[i])
+	}
+
+	return sb.String(), nil
 }
 
 func formatQuery(content string) (string, error) {
@@ -307,33 +476,6 @@ func textDocumentFormatting(context *glsp.Context, params *protocol.DocumentForm
 	return edits, nil
 }
 
-func extractTableName(statement string) []string {
-	statement = strings.ToUpper(statement)
-	var re *regexp.Regexp
-	if strings.HasPrefix(statement, "SELECT") || strings.HasPrefix(statement, "DELETE FROM") {
-		re = regexp.MustCompile(`FROM\s+([^\s,]+)`)
-	} else if strings.HasPrefix(statement, "UPDATE") {
-		re = regexp.MustCompile(`UPDATE\s+([^\s]+)`)
-	} else if strings.HasPrefix(statement, "INSERT INTO") {
-		re = regexp.MustCompile(`INSERT\s+INTO\s+([^\s(]+)`)
-	} else if strings.HasPrefix(statement, "ALTER TABLE") {
-		re = regexp.MustCompile(`ALTER\s+TABLE\s+([^\s]+)`)
-	} else {
-		return nil
-	}
-	matches := re.FindStringSubmatch(statement)
-	if len(matches) > 1 {
-		return []string{matches[1]}
-	}
-	return nil
-}
-
-var tableContextRegex = regexp.MustCompile(`(?i)\b(FROM|UPDATE|INTO|TABLE)\s+[a-zA-Z0-9_]*$`)
-
-func isTableCompletionContext(text string) bool {
-	return tableContextRegex.MatchString(text)
-}
-
 func isDataTypeCompletionContext(textBeforeCursor string) bool {
 	upperText := strings.ToUpper(textBeforeCursor)
 
@@ -405,15 +547,53 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 	offset := toOffset(content, params.Position)
 	contentBeforeCursor := content[:offset]
 
+	if before, ok0 := strings.CutSuffix(contentBeforeCursor, "."); ok0 {
+		trimmed := before
+		tokenizer := sqlparser.NewTestParser().NewStringTokenizer(trimmed)
+
+		var lastToken string
+		for {
+			typ, val := tokenizer.Scan()
+			if typ == 0 {
+				break
+			}
+			if typ == sqlparser.ID {
+				lastToken = val
+			}
+		}
+
+		if lastToken != "" {
+			aliases := extractTableAliases(content)
+			realTableName, found := aliases[lastToken]
+
+			if !found {
+				realTableName = lastToken
+			}
+
+			if columns, ok := dbSchemaCache[strings.ToLower(realTableName)]; ok {
+				var items []protocol.CompletionItem
+				for _, col := range columns {
+					items = append(items, protocol.CompletionItem{
+						Label:      col,
+						Kind:       ptr(protocol.CompletionItemKindField),
+						Detail:     ptr("Column"),
+						InsertText: ptr(col),
+					})
+				}
+				return items, nil
+			}
+		}
+
+		return []protocol.CompletionItem{}, nil
+	}
+
 	if isDataTypeCompletionContext(contentBeforeCursor) {
-		lspLog.Infof("In CREATE TABLE data type completion context for db: %s", lspActiveDbType)
 		if dbDataTypes, ok := dataTypeCmp[lspActiveDbType]; ok {
 			return createCompletions(dbDataTypes...), nil
 		}
 	}
 
 	if isConstraintCompletionContext(contentBeforeCursor) {
-		lspLog.Info("In CREATE TABLE constraint completion context")
 		completions := createCompletions("primary_key", "not_null", "unique", "default", "check", "on_delete")
 		if dbConstraints, ok := constraintCmp[lspActiveDbType]; ok {
 			completions = append(completions, createCompletions(dbConstraints...)...)
@@ -422,7 +602,6 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 	}
 
 	if isTableCompletionContext(contentBeforeCursor) {
-		lspLog.Info("In table completion context, suggesting tables.")
 		var items []protocol.CompletionItem
 		for table := range dbSchemaCache {
 			items = append(items, protocol.CompletionItem{
@@ -434,33 +613,53 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 	}
 
 	currentStatement := isolateCurrentStatement(content, offset)
-	tables := extractTableName(currentStatement)
+	aliases := extractTableAliases(currentStatement)
 
-	if len(tables) > 0 {
-		lspLog.Infof("Found table(s) in query: %v. Suggesting their columns.", tables)
+	if len(aliases) > 0 {
 		var items []protocol.CompletionItem
-		for _, table := range tables {
-			tableName := strings.Fields(strings.TrimSpace(table))[0]
-			if columns, ok := dbSchemaCache[strings.ToLower(tableName)]; ok {
+		seen := make(map[string]bool)
+
+		for alias := range aliases {
+			if !seen[alias] {
+				items = append(items, protocol.CompletionItem{
+					Label:  alias,
+					Kind:   ptr(protocol.CompletionItemKindClass),
+					Detail: ptr("Table/Alias"),
+				})
+				seen[alias] = true
+			}
+		}
+
+		for _, realName := range aliases {
+			if columns, ok := dbSchemaCache[strings.ToLower(realName)]; ok {
 				for _, col := range columns {
 					items = append(items, protocol.CompletionItem{
 						Label:      col,
 						Kind:       ptr(protocol.CompletionItemKindField),
-						Detail:     ptr("column in " + tableName),
+						Detail:     ptr("Column from " + realName),
 						InsertText: ptr(col),
 					})
 				}
 			}
 		}
+
+		for table := range dbSchemaCache {
+			if !seen[table] {
+				items = append(items, protocol.CompletionItem{
+					Label:  table,
+					Kind:   ptr(protocol.CompletionItemKindClass),
+					Detail: ptr("Table"),
+				})
+			}
+		}
+
 		items = append(items, createCompletions(
 			"order_by", "add_column", "drop_column", "create_fk", "on_delete",
 			"join", "left_join", "right_join", "inner_join", "full_outer_join",
 		)...)
 		items = append(items, createCompletions(
 			"where", "group_by", "limit", "on", "and", "or", "not")...)
-		if len(items) > 0 {
-			return items, nil
-		}
+		return items, nil
 	}
 
 	lspLog.Info("No specific context matched. Returning top-level completions.")
