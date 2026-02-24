@@ -30,7 +30,7 @@ func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, 
 		TriggerCharacters: []string{",", ".", " ", "(", "\"", "="},
 	}
 	capabilities.TextDocumentSync = protocol.TextDocumentSyncOptions{
-		Change: ptr(protocol.TextDocumentSyncKindFull),
+		Change: new(protocol.TextDocumentSyncKindFull),
 		Save:   true,
 	}
 	capabilities.DocumentFormattingProvider = true
@@ -575,9 +575,9 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 				for _, col := range columns {
 					items = append(items, protocol.CompletionItem{
 						Label:      col,
-						Kind:       ptr(protocol.CompletionItemKindField),
-						Detail:     ptr("Column"),
-						InsertText: ptr(col),
+						Kind:       new(protocol.CompletionItemKindField),
+						Detail:     new("Column"),
+						InsertText: new(col),
 					})
 				}
 				return items, nil
@@ -606,7 +606,7 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 		for table := range dbSchemaCache {
 			items = append(items, protocol.CompletionItem{
 				Label: table,
-				Kind:  ptr(protocol.CompletionItemKindClass),
+				Kind:  new(protocol.CompletionItemKindClass),
 			})
 		}
 		return items, nil
@@ -623,8 +623,8 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 			if !seen[alias] {
 				items = append(items, protocol.CompletionItem{
 					Label:  alias,
-					Kind:   ptr(protocol.CompletionItemKindClass),
-					Detail: ptr("Table/Alias"),
+					Kind:   new(protocol.CompletionItemKindClass),
+					Detail: new("Table/Alias"),
 				})
 				seen[alias] = true
 			}
@@ -635,9 +635,9 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 				for _, col := range columns {
 					items = append(items, protocol.CompletionItem{
 						Label:      col,
-						Kind:       ptr(protocol.CompletionItemKindField),
-						Detail:     ptr("Column from " + realName),
-						InsertText: ptr(col),
+						Kind:       new(protocol.CompletionItemKindField),
+						Detail:     new("Column from " + realName),
+						InsertText: new(col),
 					})
 				}
 			}
@@ -647,8 +647,8 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 			if !seen[table] {
 				items = append(items, protocol.CompletionItem{
 					Label:  table,
-					Kind:   ptr(protocol.CompletionItemKindClass),
-					Detail: ptr("Table"),
+					Kind:   new(protocol.CompletionItemKindClass),
+					Detail: new("Table"),
 				})
 			}
 		}
@@ -689,8 +689,9 @@ func toOffset(content string, position protocol.Position) int {
 	return offset
 }
 
+//go:fix inline
 func ptr[T any](v T) *T {
-	return &v
+	return new(v)
 }
 
 func createCompletions(keys ...string) []protocol.CompletionItem {
@@ -699,9 +700,9 @@ func createCompletions(keys ...string) []protocol.CompletionItem {
 		if snippet, ok := CompletionItems[key]; ok {
 			items = append(items, protocol.CompletionItem{
 				Label:            snippet.Label,
-				Kind:             ptr(snippet.Kind),
-				InsertTextFormat: ptr(snippet.InsertTextFormat),
-				InsertText:       ptr(snippet.InsertText),
+				Kind:             new(snippet.Kind),
+				InsertTextFormat: new(snippet.InsertTextFormat),
+				InsertText:       new(snippet.InsertText),
 			})
 		}
 	}
