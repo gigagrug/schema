@@ -872,25 +872,14 @@ func runLSP(args []string) {
 	}
 	defer conn.Close()
 
+	lspActiveDbType = dbtype
+	lspDbConn = conn
+
 	log.Println("Starting LSP server...")
 	commonlog.Configure(1, nil)
-	lspActiveDbType = dbtype
 
 	log.Println("LSP: Caching database schema...")
-	tables, err := getSQLTables(conn, dbtype)
-	if err != nil {
-		log.Fatalf("LSP failed to get tables: %v", err)
-	}
-
-	for _, table := range tables {
-		columns, err := getSQLColumns(conn, dbtype, table)
-		if err != nil {
-			log.Printf("LSP warning: could not get columns for table %s: %v", table, err)
-			continue
-		}
-		dbSchemaCache[table] = columns
-	}
-	log.Printf("LSP: Cached %d tables.", len(dbSchemaCache))
+	refreshSchemaCache()
 
 	handler = protocol.Handler{
 		Initialize:             initialize,
@@ -1089,27 +1078,6 @@ func Conn2DB(schemaFilePath, overrideDB, overrideURL string) (*sql.DB, string, e
 		return nil, "", fmt.Errorf("failed to open DB connection: %v", err)
 	}
 	return conn, dbType, nil
-}
-
-func splitOnTopLevelCommas(s string) []string {
-	var parts []string
-	parenLevel := 0
-	lastSplit := 0
-	for i, char := range s {
-		switch char {
-		case '(':
-			parenLevel++
-		case ')':
-			parenLevel--
-		case ',':
-			if parenLevel == 0 {
-				parts = append(parts, s[lastSplit:i])
-				lastSplit = i + 1
-			}
-		}
-	}
-	parts = append(parts, s[lastSplit:])
-	return parts
 }
 
 func PullDBSchema(ctx context.Context, conn *sql.DB, dbtype, schemaFilePath string) error {
@@ -1928,29 +1896,4 @@ func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
 		return nil, fmt.Errorf("rows iteration error (%s): %w", dbType, err)
 	}
 	return tables, nil
-}
-
-func getSQLColumns(db *sql.DB, dbType string, tableName string) ([]string, error) {
-	var cols []string
-	dialect := GetDialect(dbType)
-	if dialect.ListCols == "" {
-		return nil, fmt.Errorf("unsupported database type for loading table data: %s", dbType)
-	}
-
-	rows, err := db.Query(dialect.ListCols, tableName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get table info for %s (%s): %w", tableName, dbType, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("failed to scan column info (%s): %w", dbType, err)
-		}
-		cols = append(cols, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows iteration error on getSQLColumns (%s): %w", dbType, err)
-	}
-	return cols, nil
 }

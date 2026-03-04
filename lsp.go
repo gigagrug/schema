@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,13 +19,43 @@ import (
 const lspName = "Schema"
 
 var (
-	dbSchemaCache   = make(map[string][]string)
-	lspActiveDbType string
-	handler         protocol.Handler
-	documentStore   = make(map[string]string)
-	mutex           sync.RWMutex
-	lspLog          = commonlog.GetLogger("schema.lsp")
+	dbSchemaCache    = make(map[string][]string)
+	schemaCacheMutex sync.RWMutex
+	lspActiveDbType  string
+	lspDbConn        *sql.DB
+	handler          protocol.Handler
+	documentStore    = make(map[string]string)
+	mutex            sync.RWMutex
+	lspLog           = commonlog.GetLogger("schema.lsp")
 )
+
+func refreshSchemaCache() {
+	if lspDbConn == nil {
+		return
+	}
+
+	dbSchema, err := InspectSchema(context.Background(), lspDbConn, lspActiveDbType)
+	if err != nil {
+		lspLog.Errorf("LSP failed to inspect schema on refresh: %v", err)
+		return
+	}
+
+	newCache := make(map[string][]string)
+	for _, table := range dbSchema.Tables {
+		var cols []string
+		for _, col := range table.Columns {
+			cols = append(cols, col.Name)
+		}
+		newCache[strings.ToLower(table.Name)] = cols
+	}
+
+	// Safely swap the old cache with the new one
+	schemaCacheMutex.Lock()
+	dbSchemaCache = newCache
+	schemaCacheMutex.Unlock()
+
+	lspLog.Infof("LSP: Schema cache refreshed. %d tables found.", len(newCache))
+}
 
 func initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
 	capabilities := handler.CreateServerCapabilities()
@@ -97,77 +130,8 @@ func textDocumentDidSave(context *glsp.Context, params *protocol.DidSaveTextDocu
 		return nil
 	}
 	lspLog.Infof("Triggering diagnostics/schema update for %s...", content)
+	go refreshSchemaCache()
 	return nil
-}
-
-func extractTablesAST(sqlContent string) []string {
-	stmts, err := sqlparser.NewTestParser().ParseMultiple(sqlContent)
-	if err == nil {
-		var tables []string
-		visit := func(node sqlparser.SQLNode) (bool, error) {
-			switch n := node.(type) {
-			case *sqlparser.TableName:
-				if !n.IsEmpty() {
-					tables = append(tables, n.Name.String())
-				}
-			}
-			return true, nil
-		}
-		for _, stmt := range stmts {
-			_ = sqlparser.Walk(visit, stmt)
-		}
-		return tables
-	}
-
-	tokenizer := sqlparser.NewTestParser().NewStringTokenizer(sqlContent)
-	var tables []string
-
-	state := 0
-
-	for {
-		typ, val := tokenizer.Scan()
-		if typ == 0 { // EOF
-			break
-		}
-
-		switch typ {
-		case sqlparser.FROM, sqlparser.JOIN, sqlparser.UPDATE, sqlparser.INTO:
-			state = 1
-		case sqlparser.AS:
-			// If we just saw a table (state 2), 'AS' means next token is definitely an alias
-			if state == 2 {
-				state = 1 // Go back to expecting an ID
-			} else {
-				state = 0
-			}
-		case sqlparser.ID:
-			switch state {
-			case 1:
-				// Found a table (or alias after AS)
-				tables = append(tables, val)
-				state = 2 // Next token might be an implicit alias
-			case 2:
-				// Found an implicit alias (e.g. "projects p")
-				tables = append(tables, val)
-				state = 0
-			default:
-				state = 0
-			}
-		case 44: // Comma
-			// In a FROM clause list (FROM a, b), a comma effectively resets to expecting a table.
-			// Roughly assuming if we were in a table-context, comma means more tables.
-			if state == 2 {
-				state = 1
-			} else {
-				state = 0
-			}
-		default:
-			// Any other keyword (WHERE, ON, SET, etc) resets the state
-			state = 0
-		}
-	}
-
-	return tables
 }
 
 func extractTableAliases(sqlContent string) map[string]string {
@@ -194,20 +158,6 @@ func extractTableAliases(sqlContent string) map[string]string {
 			} else {
 				state = 0
 			}
-		case sqlparser.ID:
-			switch state {
-			case 1:
-				// Found a real table name
-				lastRealTable = val
-				tables[val] = val // Map table name to itself
-				state = 2         // Next token might be an alias
-			case 2:
-				// Found an alias (e.g. "projects p")
-				tables[val] = lastRealTable // Map alias 'p' to 'projects'
-				state = 0
-			default:
-				state = 0
-			}
 		case 44: // Comma (ASCII 44)
 			// In FROM clause lists (FROM a, b), comma resets to expecting a table
 			if state == 2 {
@@ -216,7 +166,31 @@ func extractTableAliases(sqlContent string) map[string]string {
 				state = 0
 			}
 		default:
-			state = 0
+			// Treat standard IDs or any valid alphanumeric word (like "user") as a table/alias
+			isWord := val != "" && ((val[0] >= 'a' && val[0] <= 'z') || (val[0] >= 'A' && val[0] <= 'Z') || val[0] == '_' || val[0] == '`' || val[0] == '"')
+
+			if typ == sqlparser.ID || isWord {
+				// Prevent major SQL clauses from being consumed as aliases
+				upperVal := strings.ToUpper(val)
+				if upperVal == "WHERE" || upperVal == "ON" || upperVal == "SET" || upperVal == "GROUP" || upperVal == "ORDER" || upperVal == "LIMIT" {
+					state = 0
+					continue
+				}
+
+				switch state {
+				case 1:
+					lastRealTable = val
+					tables[val] = val // Map table name to itself
+					state = 2         // Next token might be an alias
+				case 2:
+					tables[val] = lastRealTable // Map alias 'p' to 'projects'
+					state = 0
+				default:
+					state = 0
+				}
+			} else {
+				state = 0
+			}
 		}
 	}
 	return tables
@@ -544,6 +518,11 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 		return nil, nil
 	}
 
+	schemaCacheMutex.RLock()
+	localCache := make(map[string][]string)
+	maps.Copy(localCache, dbSchemaCache)
+	schemaCacheMutex.RUnlock()
+
 	offset := toOffset(content, params.Position)
 	contentBeforeCursor := content[:offset]
 
@@ -557,7 +536,7 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 			if typ == 0 {
 				break
 			}
-			if typ == sqlparser.ID {
+			if val != "" && ((val[0] >= 'a' && val[0] <= 'z') || (val[0] >= 'A' && val[0] <= 'Z') || val[0] == '_') {
 				lastToken = val
 			}
 		}
@@ -687,11 +666,6 @@ func toOffset(content string, position protocol.Position) int {
 		return len(content)
 	}
 	return offset
-}
-
-//go:fix inline
-func ptr[T any](v T) *T {
-	return new(v)
 }
 
 func createCompletions(keys ...string) []protocol.CompletionItem {
