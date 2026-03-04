@@ -39,6 +39,7 @@ import (
 )
 
 var version = "dev"
+var LSPInjections = make(map[string][]string)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -874,6 +875,7 @@ func runLSP(args []string) {
 
 	lspActiveDbType = dbtype
 	lspDbConn = conn
+	lspConfigMap = LSPInjections
 
 	log.Println("Starting LSP server...")
 	commonlog.Configure(1, nil)
@@ -1042,6 +1044,14 @@ func Conn2DB(schemaFilePath, overrideDB, overrideURL string) (*sql.DB, string, e
 				}
 			} else {
 				fmt.Printf("Warning: Invalid '%s' format in schema '%s' on line %d: %s\n", dbURLPrefix, schemaFilePath, lineNumber, line)
+			}
+		}
+
+		if after, ok := strings.CutPrefix(line, "lspConfig ="); ok {
+			jsonPart := strings.TrimSpace(after)
+			err := json.Unmarshal([]byte(jsonPart), &LSPInjections)
+			if err != nil {
+				fmt.Printf("Warning: Invalid lspConfig JSON in schema '%s' on line %d: %v\n", schemaFilePath, lineNumber, err)
 			}
 		}
 	}
@@ -1514,7 +1524,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit

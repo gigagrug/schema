@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -27,7 +28,49 @@ var (
 	documentStore    = make(map[string]string)
 	mutex            sync.RWMutex
 	lspLog           = commonlog.GetLogger("schema.lsp")
+	lspConfigMap     map[string][]string
 )
+
+func extractInjectedSQL(content string, cursorOffset int, triggers []string) (string, string, bool) {
+	textBeforeCursor := content[:cursorOffset]
+
+	var closestTriggerIdx = -1
+	for _, t := range triggers {
+		idx := strings.LastIndex(textBeforeCursor, t)
+		if idx > closestTriggerIdx {
+			closestTriggerIdx = idx
+		}
+	}
+
+	if closestTriggerIdx == -1 {
+		return "", "", false
+	}
+
+	textAfterTrigger := textBeforeCursor[closestTriggerIdx:]
+	lastQuoteIdx := strings.LastIndexAny(textAfterTrigger, "\"`")
+	if lastQuoteIdx == -1 {
+		return "", "", false
+	}
+
+	quoteChar := textAfterTrigger[lastQuoteIdx]
+	if strings.Contains(textAfterTrigger[:lastQuoteIdx], ")") {
+		return "", "", false
+	}
+
+	sqlBeforeCursor := textAfterTrigger[lastQuoteIdx+1:]
+
+	textAfterCursor := content[cursorOffset:]
+	before, _, ok := strings.Cut(textAfterCursor, string(quoteChar))
+
+	var fullSqlString string
+	if !ok {
+		fullSqlString = sqlBeforeCursor + textAfterCursor
+	} else {
+		fullSqlString = sqlBeforeCursor + before
+	}
+
+	return sqlBeforeCursor, fullSqlString, true
+}
 
 func refreshSchemaCache() {
 	if lspDbConn == nil {
@@ -524,7 +567,22 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 	schemaCacheMutex.RUnlock()
 
 	offset := toOffset(content, params.Position)
-	contentBeforeCursor := content[:offset]
+
+	var contentBeforeCursor string
+	var fullSqlContext string
+
+	ext := filepath.Ext(params.TextDocument.URI)
+	if triggers, hasInjections := lspConfigMap[ext]; hasInjections {
+		sqlBeforeCursor, fullSqlString, isInjected := extractInjectedSQL(content, offset, triggers)
+		if !isInjected {
+			return nil, nil
+		}
+		contentBeforeCursor = sqlBeforeCursor
+		fullSqlContext = fullSqlString
+	} else {
+		contentBeforeCursor = content[:offset]
+		fullSqlContext = content
+	}
 
 	if before, ok0 := strings.CutSuffix(contentBeforeCursor, "."); ok0 {
 		trimmed := before
@@ -542,14 +600,14 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 		}
 
 		if lastToken != "" {
-			aliases := extractTableAliases(content)
+			aliases := extractTableAliases(fullSqlContext)
 			realTableName, found := aliases[lastToken]
 
 			if !found {
 				realTableName = lastToken
 			}
 
-			if columns, ok := dbSchemaCache[strings.ToLower(realTableName)]; ok {
+			if columns, ok := localCache[strings.ToLower(realTableName)]; ok {
 				var items []protocol.CompletionItem
 				for _, col := range columns {
 					items = append(items, protocol.CompletionItem{
@@ -582,7 +640,7 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 
 	if isTableCompletionContext(contentBeforeCursor) {
 		var items []protocol.CompletionItem
-		for table := range dbSchemaCache {
+		for table := range localCache {
 			items = append(items, protocol.CompletionItem{
 				Label: table,
 				Kind:  new(protocol.CompletionItemKindClass),
@@ -591,7 +649,12 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 		return items, nil
 	}
 
-	currentStatement := isolateCurrentStatement(content, offset)
+	var currentStatement string
+	if ext != "" && len(lspConfigMap[ext]) > 0 && fullSqlContext != content {
+		currentStatement = fullSqlContext
+	} else {
+		currentStatement = isolateCurrentStatement(fullSqlContext, offset)
+	}
 	aliases := extractTableAliases(currentStatement)
 
 	if len(aliases) > 0 {
@@ -610,7 +673,7 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 		}
 
 		for _, realName := range aliases {
-			if columns, ok := dbSchemaCache[strings.ToLower(realName)]; ok {
+			if columns, ok := localCache[strings.ToLower(realName)]; ok {
 				for _, col := range columns {
 					items = append(items, protocol.CompletionItem{
 						Label:      col,
@@ -622,7 +685,7 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 			}
 		}
 
-		for table := range dbSchemaCache {
+		for table := range localCache {
 			if !seen[table] {
 				items = append(items, protocol.CompletionItem{
 					Label:  table,
