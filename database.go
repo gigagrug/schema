@@ -75,6 +75,7 @@ type Table struct {
 	Columns     []Column
 	Constraints []Constraint
 	Indexes     []Index
+	OldName     string
 }
 
 type Column struct {
@@ -83,6 +84,7 @@ type Column struct {
 	IsNullable      bool
 	DefaultValue    string
 	IsAutoIncrement bool
+	OldName         string
 }
 
 type Constraint struct {

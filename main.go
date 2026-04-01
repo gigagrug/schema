@@ -81,8 +81,10 @@ func main() {
 		runConfig(os.Args[2:])
 	case "lsp":
 		runLSP(os.Args[2:])
+	case "generate":
+		runGenerate(ctx, os.Args[2:])
 	default:
-		fmt.Printf("Unknown command: %s\nExpected Subcommands: studio, migrate, create, rollback, init, pull, sql, lsp, help, version, config\n", os.Args[1])
+		fmt.Printf("Unknown command: %s\nExpected Subcommands: studio, migrate, create, rollback, init, pull, sql, lsp, generate, help, version, config\n", os.Args[1])
 		os.Exit(0)
 	}
 }
@@ -897,6 +899,144 @@ func runLSP(args []string) {
 
 	server := server.NewServer(&handler, lspName, false)
 	server.RunStdio()
+}
+
+func runGenerate(ctx context.Context, args []string) {
+	cmd := flag.NewFlagSet("generate", flag.ExitOnError)
+	db := cmd.String("db", "", "database type")
+	url := cmd.String("url", "", "connection url")
+	rdir := cmd.String("rdir", "schema", "root directory")
+	cmd.Parse(args)
+
+	var migrationName string
+	if len(cmd.Args()) > 0 {
+		migrationName = cmd.Args()[0]
+	} else {
+		migrationName = "auto_migration"
+	}
+
+	schemaPath := filepath.Join(*rdir, "db.schema")
+
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
+	if err != nil {
+		log.Fatalf("Error connecting: %v", err)
+	}
+	defer conn.Close()
+
+	currentSchema, err := InspectSchema(ctx, conn, dbtype)
+	if err != nil {
+		log.Fatalf("Error inspecting current database schema: %v", err)
+	}
+
+	desiredSchema, err := ParseSchemaFile(schemaPath)
+	if err != nil {
+		log.Fatalf("Error parsing local schema file: %v", err)
+	}
+
+	diff := DiffSchemas(currentSchema, desiredSchema)
+	migrationSQL := GenerateMigrationSQL(diff, dbtype)
+
+	if strings.TrimSpace(migrationSQL) == "" {
+		fmt.Println("No schema changes detected. Everything is up to date!")
+		return
+	}
+
+	var droppedTables []string
+	for _, t := range diff.TablesToDrop {
+		droppedTables = append(droppedTables, t.Name)
+	}
+
+	var droppedColumns []string
+	for _, tDiff := range diff.TablesToAlter {
+		for _, col := range tDiff.ColumnsToDrop {
+			droppedColumns = append(droppedColumns, fmt.Sprintf("%s.%s", tDiff.TableName, col.Name))
+		}
+	}
+
+	if len(droppedTables) > 0 || len(droppedColumns) > 0 {
+		fmt.Println("\033[31m========================================\033[0m")
+		fmt.Println("\033[31m  WARNING: POTENTIAL DATA LOSS DETECTED \033[0m")
+		fmt.Println("\033[31m========================================\033[0m")
+
+		if len(droppedTables) > 0 {
+			fmt.Printf("\033[31mTables to be dropped:\033[0m %s\n", strings.Join(droppedTables, ", "))
+		}
+		if len(droppedColumns) > 0 {
+			fmt.Printf("\033[31mColumns to be dropped:\033[0m %s\n", strings.Join(droppedColumns, ", "))
+		}
+
+		fmt.Print("\n\033[31mAre you sure you want to proceed and generate this migration? (y/N)\033[0m ")
+
+		reader := bufio.NewReader(os.Stdin)
+		response, _ := reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+
+		if response != "y" && response != "yes" {
+			fmt.Println("Migration aborted. No files were written.")
+			return
+		}
+	}
+
+	// Tell the currentSchema about the renames so DiffSchemas works backwards for the rollback!
+	for tIdx, t := range currentSchema.Tables {
+
+		// 1. Rollback Table Renames
+		for _, tr := range diff.TablesToRename {
+			if tr.OldName == t.Name {
+				currentSchema.Tables[tIdx].OldName = tr.NewName
+			}
+		}
+
+		// 2. Rollback Column Renames
+		for cIdx, c := range t.Columns {
+			for _, ta := range diff.TablesToAlter {
+				// Match against original table name, or the new one if the table was ALSO renamed
+				isTargetTable := ta.TableName == t.Name
+				for _, tr := range diff.TablesToRename {
+					if tr.OldName == t.Name && ta.TableName == tr.NewName {
+						isTargetTable = true
+					}
+				}
+
+				if isTargetTable {
+					for _, cr := range ta.ColumnsToRename {
+						if cr.OldName == c.Name {
+							currentSchema.Tables[tIdx].Columns[cIdx].OldName = cr.NewName
+						}
+					}
+				}
+			}
+		}
+	}
+
+	rollbackSQL := GenerateMigrationSQL(DiffSchemas(desiredSchema, currentSchema), dbtype)
+
+	dirPath := filepath.Join(*rdir, "migrations")
+	entries, _ := os.ReadDir(dirPath)
+	maxPrefix := -1
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			parts := strings.SplitN(entry.Name(), "_", 2)
+			if prefix, err := strconv.Atoi(parts[0]); err == nil && prefix > maxPrefix {
+				maxPrefix = prefix
+			}
+		}
+	}
+
+	fileName := fmt.Sprintf("%d_%s.sql", maxPrefix+1, migrationName)
+	filePath := filepath.Join(dirPath, fileName)
+	finalFileContent := fmt.Sprintf("%s\n\n-- schema rollback\n\n%s", migrationSQL, rollbackSQL)
+
+	if err := os.WriteFile(filePath, []byte(finalFileContent), 0644); err != nil {
+		log.Fatalf("Failed to write migration file: %v", err)
+	}
+
+	dialect := GetDialect(dbtype)
+	if _, err := conn.ExecContext(ctx, dialect.Insert, fileName, false); err != nil {
+		log.Fatalf("Failed to track new migration: %v", err)
+	}
+
+	fmt.Printf("Successfully generated migration: %s\n", fileName)
 }
 
 func CheckTableExists(ctx context.Context, conn *sql.DB, dbtype string, rdir string) {
