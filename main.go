@@ -23,6 +23,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -1502,10 +1503,12 @@ type keyMap struct {
 	Navigation key.Binding
 	Enter      key.Binding
 	Quit       key.Binding
+	Edit       key.Binding
+	Refresh    key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Tab, k.Search, k.Clear, k.RunQuery, k.Navigation, k.Enter, k.Quit}
+	return []key.Binding{k.Tab, k.Search, k.Clear, k.RunQuery, k.Navigation, k.Enter, k.Refresh, k.Quit}
 }
 func (k keyMap) FullHelp() [][]key.Binding { return nil }
 
@@ -1517,6 +1520,8 @@ var keys = keyMap{
 	Navigation: key.NewBinding(key.WithKeys("up", "down", "left", "right", "k", "j", "h", "l"), key.WithHelp("↑/↓/←/→", "nav")),
 	Enter:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 	Quit:       key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
+	Edit:       key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit cell")),
+	Refresh:    key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "refresh")),
 }
 
 var (
@@ -1577,6 +1582,9 @@ type model struct {
 	viewingRowDetail   bool
 	selectedRow        []string
 	tableXOffset       int
+	detailCursor       int
+	editingCell        bool
+	editInput          textinput.Model
 }
 
 func initialModel(db *sql.DB, dbType string) model {
@@ -1614,6 +1622,10 @@ func initialModel(db *sql.DB, dbType string) model {
 	s.Selected = tableSelectedStyle
 	t.SetStyles(s)
 
+	ti := textinput.New()
+	ti.Prompt = "✏️  "
+	ti.CharLimit = 256
+
 	return model{
 		db:          db,
 		dbType:      dbType,
@@ -1624,6 +1636,7 @@ func initialModel(db *sql.DB, dbType string) model {
 		keys:        keys,
 		focusedPane: 0,
 		table:       t,
+		editInput:   ti,
 	}
 }
 
@@ -1684,25 +1697,140 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+
+		case key.Matches(msg, m.keys.Refresh):
+			// 1. Refresh the Tables List
+			tables, err := getSQLTables(m.db, m.dbType)
+			if err != nil {
+				m.queryError = err
+				m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Failed to refresh tables:\n%v", err)))
+				return m, nil
+			}
+
+			items := make([]list.Item, len(tables))
+			for i, t := range tables {
+				items[i] = tableItem(t)
+			}
+
+			// SetItems returns a tea.Cmd we need to process
+			cmd = m.tableList.SetItems(items)
+			cmds = append(cmds, cmd)
+
+			// 2. Refresh the Data View (Query or Table)
+			if m.showingQueryResult {
+				query := m.sqlTextarea.Value()
+				if query != "" {
+					m.executeSQLQuery(query)
+				}
+			} else if m.selectedTable != "" {
+				err := m.loadTableData(m.selectedTable)
+				if err != nil {
+					m.queryError = err
+					m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Failed to refresh table data:\n%v", err)))
+				}
+			}
+			return m, tea.Batch(cmds...)
 		}
+
 		if m.tableList.FilterState() == list.Filtering {
 			m.tableList, cmd = m.tableList.Update(msg)
 			return m, cmd
 		}
+
 		if m.viewingRowDetail {
-			switch {
-			case key.Matches(msg, m.keys.Clear), key.Matches(msg, m.keys.Quit), msg.String() == "esc", msg.String() == "q":
-				m.viewingRowDetail = false
-				m.viewport.SetWidth(m.viewportPaneWidth)
-				m.viewport.SetHeight(m.viewportPaneHeight)
-				m.viewport.SetContent(m.table.View())
-				return m, nil
-			default:
-				m.viewport, cmd = m.viewport.Update(msg)
-				cmds = append(cmds, cmd)
-				return m, tea.Batch(cmds...)
+			if m.editingCell {
+				// WE ARE TYPING IN THE EDIT BOX
+				switch {
+				case key.Matches(msg, m.keys.Enter):
+					// Execute the UPDATE
+					colName := m.table.Columns()[m.detailCursor].Title
+					newVal := m.editInput.Value()
+
+					// Heuristic: We assume the 0th column is the Primary Key
+					pkCol := m.table.Columns()[0].Title
+					pkVal := m.selectedRow[0]
+
+					// Handle dialect placeholders safely
+					var query string
+					if m.dbType == "postgres" {
+						query = fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s = $2", m.selectedTable, colName, pkCol)
+					} else {
+						query = fmt.Sprintf("UPDATE %s SET %s = ? WHERE %s = ?", m.selectedTable, colName, pkCol)
+					}
+
+					_, err := m.db.Exec(query, newVal, pkVal)
+					if err != nil {
+						m.queryError = err
+						m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Update Error:\n%v\n\nPress Esc to return.", err)))
+					} else {
+						// Update the local state so the UI reflects the change immediately
+						m.selectedRow[m.detailCursor] = newVal
+						rows := m.table.Rows()
+						rows[m.table.Cursor()][m.detailCursor] = newVal
+						m.table.SetRows(rows)
+
+						m.editingCell = false
+						m.renderDetailView()
+					}
+					return m, nil
+
+				case key.Matches(msg, m.keys.Clear), msg.String() == "esc":
+					// Cancel editing
+					m.editingCell = false
+					m.renderDetailView()
+					return m, nil
+
+				default:
+					// Pass keystrokes to the text input
+					var cmd tea.Cmd
+					m.editInput, cmd = m.editInput.Update(msg)
+					m.renderDetailView()
+					return m, cmd
+				}
+			} else {
+				// WE ARE NAVIGATING THE DETAIL VIEW
+				switch {
+				case key.Matches(msg, m.keys.Clear), key.Matches(msg, m.keys.Quit), msg.String() == "esc", msg.String() == "q":
+					m.viewingRowDetail = false
+					m.selectedRow = nil
+					m.viewport.SetWidth(m.viewportPaneWidth)
+					m.viewport.SetHeight(m.viewportPaneHeight)
+					m.viewport.SetContent(m.table.View())
+					m.viewport.SetXOffset(m.tableXOffset)
+					return m, nil
+
+				case msg.String() == "up", msg.String() == "k":
+					if m.detailCursor > 0 {
+						m.detailCursor--
+						m.renderDetailView()
+					}
+					return m, nil
+
+				case msg.String() == "down", msg.String() == "j":
+					if m.detailCursor < len(m.selectedRow)-1 {
+						m.detailCursor++
+						m.renderDetailView()
+					}
+					return m, nil
+
+				case key.Matches(msg, m.keys.Edit):
+					// Open the editor!
+					m.editingCell = true
+					m.editInput.SetValue(m.selectedRow[m.detailCursor])
+					m.editInput.Focus()
+					m.renderDetailView()
+					return m, textinput.Blink
+
+				default:
+					// Allow normal viewport scrolling
+					var cmd tea.Cmd
+					m.viewport, cmd = m.viewport.Update(msg)
+					cmds = append(cmds, cmd)
+					return m, tea.Batch(cmds...)
+				}
 			}
 		} else {
+			// WE ARE IN THE MAIN STUDIO VIEW
 			switch m.focusedPane {
 			case 0:
 				switch {
@@ -1726,49 +1854,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 
 			case 2:
-				if m.viewingRowDetail {
-					switch {
-					case key.Matches(msg, m.keys.Clear), key.Matches(msg, m.keys.Quit), msg.String() == "esc":
-						m.viewingRowDetail = false
-						m.selectedRow = nil
-						m.viewport.SetWidth(m.viewportPaneWidth)
-						m.viewport.SetHeight(m.viewportPaneHeight)
-						m.viewport.SetContent(m.table.View())
-						m.viewport.SetXOffset(m.tableXOffset)
+				switch {
+				case key.Matches(msg, m.keys.Enter):
+					row := m.table.SelectedRow()
+					if row == nil {
 						return m, nil
-					default:
-						m.viewport, cmd = m.viewport.Update(msg)
-						cmds = append(cmds, cmd)
 					}
-				} else {
-					switch {
-					case key.Matches(msg, m.keys.Enter):
-						row := m.table.SelectedRow()
-						if row == nil {
-							return m, nil
-						}
-						m.selectedRow = row
-						m.viewingRowDetail = true
-						m.viewport.SetWidth(m.width)
-						m.viewport.SetHeight(m.height)
-						m.renderDetailView()
-						m.tableXOffset = m.viewport.XOffset()
-						m.viewport.GotoTop()
-						m.viewport.SetXOffset(0)
-						return m, nil
+					m.selectedRow = row
+					m.viewingRowDetail = true
 
-					case msg.String() == "left", msg.String() == "h":
-						m.viewport.ScrollLeft(5)
-					case msg.String() == "right", msg.String() == "l":
-						m.viewport.ScrollRight(5)
-					case key.Matches(msg, m.keys.Navigation):
-						m.table, cmd = m.table.Update(msg)
-						cmds = append(cmds, cmd)
-						m.viewport.SetContent(m.table.View())
-					default:
-						m.viewport, cmd = m.viewport.Update(msg)
-						cmds = append(cmds, cmd)
-					}
+					// Reset cursor states
+					m.detailCursor = 0
+					m.editingCell = false
+
+					m.viewport.SetWidth(m.width)
+					m.viewport.SetHeight(m.height)
+					m.renderDetailView()
+					m.tableXOffset = m.viewport.XOffset()
+					m.viewport.GotoTop()
+					m.viewport.SetXOffset(0)
+					return m, nil
+
+				case msg.String() == "left", msg.String() == "h":
+					m.viewport.ScrollLeft(5)
+				case msg.String() == "right", msg.String() == "l":
+					m.viewport.ScrollRight(5)
+				case key.Matches(msg, m.keys.Navigation):
+					m.table, cmd = m.table.Update(msg)
+					cmds = append(cmds, cmd)
+					m.viewport.SetContent(m.table.View())
+				default:
+					m.viewport, cmd = m.viewport.Update(msg)
+					cmds = append(cmds, cmd)
 				}
 			}
 		}
@@ -1819,6 +1936,7 @@ func (m model) View() tea.View {
 	v.AltScreen = false
 	return v
 }
+
 func (m *model) renderDetailView() {
 	if len(m.selectedRow) == 0 {
 		return
@@ -1840,13 +1958,29 @@ func (m *model) renderDetailView() {
 		hStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 		vStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Width(wrapWidth)
 
+		if i == m.detailCursor {
+			hStyle = hStyle.Background(lipgloss.Color("57")).Foreground(lipgloss.Color("229"))
+			if !m.editingCell {
+				vStyle = vStyle.Background(lipgloss.Color("237"))
+			}
+		}
+
 		sb.WriteString(hStyle.Render(header + ":"))
 		sb.WriteString("\n")
-		sb.WriteString(vStyle.Render(cell))
+
+		if m.editingCell && i == m.detailCursor {
+			sb.WriteString(m.editInput.View())
+		} else {
+			sb.WriteString(vStyle.Render(cell))
+		}
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("\n(Press Esc or q to close)"))
+	if m.editingCell {
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("\n(Press Enter to save, Esc to cancel)"))
+	} else {
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("\n(Press 'e' to edit, ↑/↓ to select, Esc/q to close)"))
+	}
 
 	m.viewport.SetContent(sb.String())
 }
