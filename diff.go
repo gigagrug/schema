@@ -360,10 +360,6 @@ func DiffTables(current, desired Table) TableDiff {
 
 			finalColDrops = append(finalColDrops[:renamedFromIdx], finalColDrops[renamedFromIdx+1:]...)
 		} else {
-			// FIX 4: "NOT NULL Without Default" Trap Warning
-			if !addCol.IsNullable && addCol.DefaultValue == "" && !addCol.IsAutoIncrement {
-				fmt.Printf("\033[33mWarning: You are adding a NOT NULL column '%s' to '%s' without a default value. This migration will fail if the table already has existing rows!\033[0m\n", addCol.Name, diff.TableName)
-			}
 			finalColAdds = append(finalColAdds, addCol)
 		}
 	}

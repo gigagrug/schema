@@ -500,9 +500,6 @@ func (m *mysqlDriver) Enums(ctx context.Context) ([]Enum, error) {
 		var tn, cn, ctype string
 		rows.Scan(&tn, &cn, &ctype)
 		eName := tn + "_" + cn
-		if cn == "status" && strings.HasSuffix(tn, "s") {
-			eName = tn[:len(tn)-1] + "_" + cn
-		}
 		if !seen[eName] {
 			vals := strings.Split(strings.TrimSuffix(strings.TrimPrefix(ctype, "enum("), ")"), ",")
 			for i := range vals {
@@ -529,9 +526,6 @@ func (m *mysqlDriver) Columns(ctx context.Context, table string) ([]Column, erro
 		ft := strings.ToUpper(dt)
 		if dt == "enum" {
 			ft = table + "_" + name
-			if name == "status" && strings.HasSuffix(table, "s") {
-				ft = table[:len(table)-1] + "_" + name
-			}
 		} else if strings.Contains(ct, "tinyint(1)") {
 			ft = "BOOLEAN"
 		} else if dt == "int" {

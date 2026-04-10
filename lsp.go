@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -280,19 +281,34 @@ func isolateCurrentStatement(content string, offset int) string {
 	return strings.TrimSpace(content[start:end])
 }
 
+// --- LOCATION: lsp.go (func splitOnTopCommas) ---
 func splitOnTopCommas(s string) []string {
 	var result []string
 	parenLevel := 0
+	inSingleQuote := false
+	inDoubleQuote := false
 	lastSplit := 0
 
 	for i, char := range s {
 		switch char {
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
 		case '(':
-			parenLevel++
+			if !inSingleQuote && !inDoubleQuote {
+				parenLevel++
+			}
 		case ')':
-			parenLevel--
+			if !inSingleQuote && !inDoubleQuote {
+				parenLevel--
+			}
 		case ',':
-			if parenLevel == 0 {
+			if parenLevel == 0 && !inSingleQuote && !inDoubleQuote {
 				result = append(result, strings.TrimSpace(s[lastSplit:i]))
 				lastSplit = i + 1
 			}
@@ -640,7 +656,14 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 
 	if isTableCompletionContext(contentBeforeCursor) {
 		var items []protocol.CompletionItem
+
+		var tableNames []string
 		for table := range localCache {
+			tableNames = append(tableNames, table)
+		}
+		sort.Strings(tableNames)
+
+		for _, table := range tableNames {
 			items = append(items, protocol.CompletionItem{
 				Label: table,
 				Kind:  new(protocol.CompletionItemKindClass),
@@ -685,7 +708,13 @@ func textDocumentCompletion(context *glsp.Context, params *protocol.CompletionPa
 			}
 		}
 
+		var tableNames []string
 		for table := range localCache {
+			tableNames = append(tableNames, table)
+		}
+		sort.Strings(tableNames)
+
+		for _, table := range tableNames {
 			if !seen[table] {
 				items = append(items, protocol.CompletionItem{
 					Label:  table,

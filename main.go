@@ -1006,7 +1006,8 @@ func runSQL(ctx context.Context, args []string) {
 		return
 	}
 
-	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(query)), "SELECT") {
+	upperQuery := strings.ToUpper(strings.TrimSpace(query))
+	if strings.HasPrefix(upperQuery, "SELECT") || strings.HasPrefix(upperQuery, "WITH") || strings.HasPrefix(upperQuery, "EXPLAIN") || strings.HasPrefix(upperQuery, "SHOW") || strings.HasPrefix(upperQuery, "PRAGMA") {
 		rows, err := conn.QueryContext(ctx, query)
 		if err != nil {
 			log.Fatalf("Error executing SQL query: %v\n", err)
@@ -1119,6 +1120,24 @@ func runGenerate(ctx context.Context, args []string) {
 	}
 
 	diff := DiffSchemas(currentSchema, desiredSchema)
+	var fatalErrors []string
+	for _, tDiff := range diff.TablesToAlter {
+		for _, addCol := range tDiff.ColumnsToAdd {
+			if !addCol.IsNullable && addCol.DefaultValue == "" && !addCol.IsAutoIncrement {
+				fatalErrors = append(fatalErrors, fmt.Sprintf("Table '%s': Added NOT NULL column '%s' without a DEFAULT value.", tDiff.TableName, addCol.Name))
+			}
+		}
+	}
+	if len(fatalErrors) > 0 {
+		fmt.Println("\033[31m========================================\033[0m")
+		fmt.Println("\033[31m  MIGRATION GENERATION ABORTED          \033[0m")
+		fmt.Println("\033[31m========================================\033[0m")
+		for _, errStr := range fatalErrors {
+			fmt.Printf("\033[31m- %s\033[0m\n", errStr)
+		}
+		fmt.Println("\033[33mFix: Provide a DEFAULT value in your schema, or make the column nullable.\033[0m")
+		os.Exit(1)
+	}
 	migrationSQL := GenerateMigrationSQL(diff, dbtype)
 
 	if strings.TrimSpace(migrationSQL) == "" {
@@ -1855,6 +1874,8 @@ type model struct {
 	keys               keyMap
 	focusedPane        int
 	selectedTable      string
+	primaryKeyCol      string
+	primaryKeyIdx      int
 	queryError         error
 	showingQueryResult bool
 	width              int
@@ -2029,16 +2050,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					colName := m.table.Columns()[m.detailCursor].Title
 					newVal := m.editInput.Value()
 
-					// Heuristic: We assume the 0th column is the Primary Key
-					pkCol := m.table.Columns()[0].Title
-					pkVal := m.selectedRow[0]
+					pkCol := m.primaryKeyCol
+					pkVal := m.selectedRow[m.primaryKeyIdx]
 
-					// Handle dialect placeholders safely
+					safeTable := quoteID(m.selectedTable, m.dbType)
+					safeCol := quoteID(colName, m.dbType)
+					safePk := quoteID(pkCol, m.dbType)
+
 					var query string
 					if m.dbType == "postgres" {
-						query = fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s = $2", m.selectedTable, colName, pkCol)
+						query = fmt.Sprintf("UPDATE %s SET %s = $1 WHERE %s = $2", safeTable, safeCol, safePk)
 					} else {
-						query = fmt.Sprintf("UPDATE %s SET %s = ? WHERE %s = ?", m.selectedTable, colName, pkCol)
+						query = fmt.Sprintf("UPDATE %s SET %s = ? WHERE %s = ?", safeTable, safeCol, safePk)
 					}
 
 					_, err := m.db.Exec(query, newVal, pkVal)
@@ -2336,6 +2359,28 @@ func (m *model) loadTableData(tableName string) error {
 		totalWidth += w
 	}
 
+	m.primaryKeyCol = columns[0]
+	m.primaryKeyIdx = 0
+	dbSchema, err := InspectSchema(context.Background(), m.db, m.dbType)
+	if err == nil {
+		for _, t := range dbSchema.Tables {
+			if t.Name == tableName {
+				for _, c := range t.Constraints {
+					if c.Kind == PrimaryKey && len(c.Columns) > 0 {
+						m.primaryKeyCol = c.Columns[0]
+						for i, col := range columns {
+							if col == m.primaryKeyCol {
+								m.primaryKeyIdx = i
+								break
+							}
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
 	m.table.SetColumns(tableColumns)
 	m.table.SetRows(tableRows)
 	if totalWidth < m.viewport.Width() {
@@ -2463,4 +2508,11 @@ func getSQLTables(db *sql.DB, dbType string) ([]string, error) {
 		return nil, fmt.Errorf("rows iteration error (%s): %w", dbType, err)
 	}
 	return tables, nil
+}
+
+func quoteID(id string, dbType string) string {
+	if dbType == "mysql" || dbType == "mariadb" {
+		return "`" + id + "`"
+	}
+	return "\"" + id + "\""
 }
