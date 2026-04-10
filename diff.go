@@ -71,6 +71,9 @@ func DiffSchemas(current, desired *Database) SchemaDiff {
 
 	desiredTables := make(map[string]Table)
 	for _, t := range desired.Tables {
+		if isInternalTable(t.Name) {
+			continue
+		}
 		desiredTables[t.Name] = t
 	}
 
@@ -111,7 +114,14 @@ func DiffSchemas(current, desired *Database) SchemaDiff {
 	// 2. Find Tables to Drop
 	for name, cTable := range currentTables {
 		if _, exists := desiredTables[name]; !exists {
-			if name != "_schema_migrations" {
+			// NEW: Ignore internal migration, SQLite, and Turso sync tables
+			isInternal := name == "_schema_migrations" ||
+				strings.HasPrefix(name, "sqlite_") ||
+				strings.HasPrefix(name, "turso_cdc") ||
+				strings.HasPrefix(name, "turso_sync") ||
+				strings.HasPrefix(name, "libsql_")
+
+			if !isInternal {
 				diff.TablesToDrop = append(diff.TablesToDrop, cTable)
 			}
 		}
@@ -464,7 +474,7 @@ func GenerateMigrationSQL(diff SchemaDiff, dbType string) string {
 	}
 
 	for _, tDiff := range diff.TablesToAlter {
-		isSQLite := dbType == "sqlite" || dbType == "libsql" || dbType == "turso"
+		isSQLite := dbType == "sqlite" || dbType == "libsql" || dbType == "turso" || dbType == "tursosync"
 
 		if isSQLite && (len(tDiff.ColumnsToModify) > 0 || len(tDiff.ConstraintsToAdd) > 0 || len(tDiff.ConstraintsToDrop) > 0) {
 			statements = append(statements, generateSQLiteTableRebuild(tDiff))
@@ -574,7 +584,7 @@ func generateCreateTableSQL(t Table, dbType string) string {
 	inlinePKs := make(map[string]bool)
 
 	for _, col := range t.Columns {
-		isInlinePK := col.IsAutoIncrement && (dbType == "sqlite" || dbType == "libsql" || dbType == "turso")
+		isInlinePK := col.IsAutoIncrement && (dbType == "sqlite" || dbType == "libsql" || dbType == "turso" || dbType == "tursosync")
 		if isInlinePK {
 			inlinePKs[col.Name] = true
 		}
@@ -617,7 +627,7 @@ func formatColumnDefinition(col Column, dbType string) string {
 
 	if col.IsAutoIncrement {
 		switch dbType {
-		case "sqlite", "libsql", "turso":
+		case "sqlite", "libsql", "turso", "tursosync":
 			if colType == "INTEGER" || colType == "INT" {
 				colType = "INTEGER PRIMARY KEY AUTOINCREMENT"
 			}
@@ -721,4 +731,13 @@ func generateSQLiteTableRebuild(tDiff TableDiff) string {
 	stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s RENAME TO %s;", tempTableName, tDiff.TableName))
 
 	return strings.Join(stmts, "\n")
+}
+
+// isInternalTable checks if a table is a system/replication table that should be ignored
+func isInternalTable(name string) bool {
+	return name == "_schema_migrations" ||
+		strings.HasPrefix(name, "sqlite_") ||
+		strings.HasPrefix(name, "turso_cdc") ||
+		strings.HasPrefix(name, "turso_sync") ||
+		strings.HasPrefix(name, "libsql_")
 }

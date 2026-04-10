@@ -12,7 +12,7 @@ type Dialect struct{ Type, TableExists, CreateInit, Insert, Update, Delete, Sele
 
 func GetDialect(dbType string) Dialect {
 	switch dbType {
-	case "sqlite", "libsql", "turso":
+	case "sqlite", "libsql", "turso", "tursosync":
 		return Dialect{
 			Type:         dbType,
 			TableExists:  "SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'",
@@ -21,7 +21,7 @@ func GetDialect(dbType string) Dialect {
 			Update:       "UPDATE _schema_migrations SET migrated = ? WHERE file = ?",
 			Delete:       "DELETE FROM _schema_migrations WHERE file = ?",
 			SelectStatus: "SELECT migrated FROM _schema_migrations WHERE file = ?",
-			ListTables:   "SELECT name FROM sqlite_master WHERE type='table';",
+			ListTables:   "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'turso_cdc%' AND name NOT LIKE 'turso_sync%' AND name NOT LIKE 'libsql_%' AND name != '_schema_migrations';",
 			ListCols:     "SELECT name FROM PRAGMA_TABLE_INFO(?);",
 		}
 	case "postgres":
@@ -123,7 +123,7 @@ type schemaDriver interface {
 func InspectSchema(ctx context.Context, db *sql.DB, dbType string) (*Database, error) {
 	var drv schemaDriver
 	switch dbType {
-	case "sqlite", "libsql", "turso":
+	case "sqlite", "libsql", "turso", "tursosync":
 		drv = &sqliteDriver{db}
 	case "postgres":
 		drv = &postgresDriver{db}

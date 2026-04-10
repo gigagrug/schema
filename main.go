@@ -36,7 +36,7 @@ import (
 	"github.com/tliron/glsp/server"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 	_ "modernc.org/sqlite"
-	_ "turso.tech/database/tursogo"
+	turso "turso.tech/database/tursogo"
 )
 
 var version = "dev"
@@ -108,6 +108,8 @@ func printHelp() {
 	fmt.Println("Flags:")
 	fmt.Println("  -db          db type (default \"sqlite\")")
 	fmt.Println("  -url         db url (default \"./schema/dev.db\")")
+	fmt.Println("  -remote      remote url (for tursosync)")
+	fmt.Println("  -token       auth token (for tursosync)")
 	fmt.Println("  -rdir        Root directory (default \"schema\")")
 	fmt.Println("  -dir         Migrations directory (default \"migrations\")")
 }
@@ -217,6 +219,8 @@ func runCreate(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("create", flag.ExitOnError)
 	db := cmd.String("db", "", "update database type")
 	url := cmd.String("url", "", "update connection url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	dir := cmd.String("dir", "migrations", "directory path")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
@@ -240,6 +244,16 @@ func runCreate(ctx context.Context, args []string) {
 	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
+	}
+
+	if dbtype == "tursosync" {
+		conn.Close()
+
+		remoteConn, err := getTursoRemoteConn(schemaPath, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to connect to Remote Primary: %v", err)
+		}
+		conn = remoteConn
 	}
 	defer conn.Close()
 	dialect := GetDialect(dbtype)
@@ -385,6 +399,8 @@ func runStudio(args []string) {
 	cmd := flag.NewFlagSet("studio", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "database url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
 
@@ -397,6 +413,18 @@ func runStudio(args []string) {
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
+
+	if dbtype == "tursosync" {
+		fmt.Println("🚀 Turso Sync detected: Connecting Studio directly to the Remote Primary...")
+		conn.Close()
+
+		remoteConn, err := getTursoRemoteConn(schemaPath, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to connect to Remote Primary: %v", err)
+		}
+		conn = remoteConn
+	}
+
 	defer conn.Close()
 
 	p := tea.NewProgram(initialModel(conn, dbtype))
@@ -409,6 +437,8 @@ func runMigrate(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("migrate", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	rdir := cmd.String("rdir", "schema", "root directory")
 
 	var targetFile string
@@ -427,7 +457,20 @@ func runMigrate(ctx context.Context, args []string) {
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
-	defer conn.Close()
+
+	if dbtype == "tursosync" {
+		fmt.Println("🚀 Turso Sync detected: Routing schema migration to the Remote Primary...")
+		conn.Close()
+
+		remoteConn, err := getTursoRemoteConn(schemaPath, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to connect to Remote Primary: %v", err)
+		}
+		conn = remoteConn
+		defer conn.Close()
+	} else {
+		defer conn.Close()
+	}
 
 	CheckTableExists(ctx, conn, dbtype, *rdir)
 	dialect := GetDialect(dbtype)
@@ -481,6 +524,11 @@ func runMigrate(ctx context.Context, args []string) {
 		sqlContent := string(sqlFile)
 		migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
 
+		isSQLite := dbtype == "sqlite" || dbtype == "libsql" || dbtype == "turso" || dbtype == "tursosync"
+		if isSQLite {
+			_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF;")
+		}
+
 		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			log.Fatalf("Error starting transaction: %v", err)
@@ -499,6 +547,10 @@ func runMigrate(ctx context.Context, args []string) {
 
 		if err := tx.Commit(); err != nil {
 			log.Fatalf("Error committing transaction: %v\n", err)
+		}
+
+		if isSQLite {
+			_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON;")
 		}
 
 		err = PullDBSchema(ctx, conn, dbtype, schemaPath)
@@ -541,6 +593,11 @@ func runMigrate(ctx context.Context, args []string) {
 				sqlContent := string(sqlFile)
 				migrationSQL := strings.Split(sqlContent, "-- schema rollback")[0]
 
+				isSQLite := dbtype == "sqlite" || dbtype == "libsql" || dbtype == "turso" || dbtype == "tursosync"
+				if isSQLite {
+					_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF;")
+				}
+
 				tx, err := conn.BeginTx(ctx, nil)
 				if err != nil {
 					return fmt.Errorf("starting transaction: %w", err)
@@ -555,7 +612,15 @@ func runMigrate(ctx context.Context, args []string) {
 					return fmt.Errorf("updating migration status: %w", err)
 				}
 
-				return tx.Commit()
+				if err := tx.Commit(); err != nil {
+					return err
+				}
+
+				if isSQLite {
+					_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON;")
+				}
+
+				return nil
 			}()
 
 			if err != nil {
@@ -569,12 +634,32 @@ func runMigrate(ctx context.Context, args []string) {
 			fmt.Printf("Schema successfully migrated %s\n", entry.Name)
 		}
 	}
+
+	// --- NEW: Auto-Sync Local Replica ---
+	if dbtype == "tursosync" {
+		fmt.Println("📥 Auto-syncing new schema to local database...")
+		syncDb, err := initTursoSync(schemaPath, *url, *remote, *token)
+		if err == nil {
+			if _, err := syncDb.Pull(ctx); err != nil {
+				fmt.Printf("⚠️ Warning: Pull failed: %v\n", err)
+			}
+			// CRITICAL: Flush the WAL to disk so the local db sees the changes!
+			if err := syncDb.Checkpoint(ctx); err != nil {
+				fmt.Printf("⚠️ Warning: Checkpoint failed: %v\n", err)
+			}
+			fmt.Println("✅ Local database successfully synced.")
+		} else {
+			fmt.Printf("⚠️ Warning: Failed to auto-sync local replica: %v\n", err)
+		}
+	}
 }
 
 func runRollback(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("rollback", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	dir := cmd.String("dir", "migrations", "migrations directory")
 	rdir := cmd.String("rdir", "schema", "root directory")
 
@@ -594,7 +679,21 @@ func runRollback(ctx context.Context, args []string) {
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
-	defer conn.Close()
+
+	if dbtype == "tursosync" {
+		fmt.Println("🚀 Turso Sync detected: Routing rollback to the Remote Primary...")
+		conn.Close()
+
+		remoteConn, err := getTursoRemoteConn(schemaPath, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to connect to Remote Primary: %v", err)
+		}
+		conn = remoteConn
+		defer conn.Close()
+	} else {
+		defer conn.Close()
+	}
+
 	dialect := GetDialect(dbtype)
 
 	var migrationToRollback string
@@ -631,6 +730,11 @@ func runRollback(ctx context.Context, args []string) {
 	}
 	rollbackSQL := parts[1]
 
+	isSQLite := dbtype == "sqlite" || dbtype == "libsql" || dbtype == "turso" || dbtype == "tursosync"
+	if isSQLite {
+		_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF;")
+	}
+
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		log.Fatalf("Error starting transaction: %v", err)
@@ -651,25 +755,75 @@ func runRollback(ctx context.Context, args []string) {
 		log.Fatalf("Error committing rollback transaction: %v\n", err)
 	}
 
+	if isSQLite {
+		_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON;")
+	}
+
 	err = PullDBSchema(ctx, conn, dbtype, schemaPath)
 	if err != nil {
 		log.Fatalf("Error pulling DB schema after rollback: %v\n", err)
 	}
 
 	fmt.Printf("Successfully rolled back migration %s\n", migrationFileName)
+
+	if dbtype == "tursosync" {
+		fmt.Println("📥 Auto-syncing rolled back schema to local database...")
+		syncDb, err := initTursoSync(schemaPath, *url, *remote, *token)
+		if err == nil {
+			if _, err := syncDb.Pull(ctx); err != nil {
+				fmt.Printf("⚠️ Warning: Pull failed: %v\n", err)
+			}
+			if err := syncDb.Checkpoint(ctx); err != nil {
+				fmt.Printf("⚠️ Warning: Checkpoint failed: %v\n", err)
+			}
+			fmt.Println("✅ Local database successfully synced.")
+		} else {
+			fmt.Printf("⚠️ Warning: Failed to auto-sync local replica: %v\n", err)
+		}
+	}
 }
 
 func runPull(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("pull", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
-	url := cmd.String("url", "", "connection url")
+	url := cmd.String("url", "", "local connection url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
+
 	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
+	}
+
+	if dbtype == "tursosync" {
+		// CRITICAL: Release the local file lock!
+		conn.Close()
+
+		_ = godotenv.Load()
+		syncDb, err := initTursoSync(schemaPath, *url, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to initialize sync engine: %v", err)
+		}
+
+		fmt.Println("📥 Pulling latest changes from the remote database...")
+		if _, err := syncDb.Pull(ctx); err != nil {
+			log.Fatalf("Pull failed: %v", err)
+		}
+		// CRITICAL: Flush the WAL to disk!
+		if err := syncDb.Checkpoint(ctx); err != nil {
+			log.Fatalf("Checkpoint failed: %v", err)
+		}
+		fmt.Println("✅ Successfully pulled data to local replica.")
+
+		// Reconnect so we can proceed with updating the db.schema text file!
+		conn, _, err = Conn2DB(schemaPath, *db, *url)
+		if err != nil {
+			log.Fatalf("Error reconnecting after pull: %v", err)
+		}
 	}
 	defer conn.Close()
 
@@ -677,12 +831,15 @@ func runPull(ctx context.Context, args []string) {
 	if err != nil {
 		log.Fatalf("Err pulling db schema: %v\n", err)
 	}
+	fmt.Println("✅ Successfully updated schema.")
 }
 
 func runRemove(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("remove", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "connection url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	cmd.Parse(args)
 
@@ -703,7 +860,21 @@ func runRemove(ctx context.Context, args []string) {
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
-	defer conn.Close()
+
+	if dbtype == "tursosync" {
+		fmt.Println("🚀 Turso Sync detected: Routing removal to the Remote Primary...")
+		conn.Close()
+
+		remoteConn, err := getTursoRemoteConn(schemaPath, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to connect to Remote Primary: %v", err)
+		}
+		conn = remoteConn
+		defer conn.Close()
+	} else {
+		defer conn.Close()
+	}
+
 	dialect := GetDialect(dbtype)
 
 	migrationFileName := name
@@ -757,6 +928,8 @@ func runSQL(ctx context.Context, args []string) {
 	cmd := flag.NewFlagSet("sql", flag.ExitOnError)
 	db := cmd.String("db", "", "database type")
 	url := cmd.String("url", "", "database url")
+	remote := cmd.String("remote", "", "remote turso url")
+	token := cmd.String("token", "", "turso auth token")
 	rdir := cmd.String("rdir", "schema", "root directory")
 	dir := cmd.String("dir", "migrations", "directory")
 	cmd.Parse(args)
@@ -776,9 +949,20 @@ func runSQL(ctx context.Context, args []string) {
 	}
 
 	schemaPath := filepath.Join(*rdir, "db.schema")
-	conn, _, err := Conn2DB(schemaPath, *db, *url)
+	conn, dbtype, err := Conn2DB(schemaPath, *db, *url)
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
+	}
+
+	if dbtype == "tursosync" {
+		fmt.Println("🚀 Turso Sync detected: Routing SQL directly to the Remote Primary...")
+		conn.Close()
+
+		remoteConn, err := getTursoRemoteConn(schemaPath, *remote, *token)
+		if err != nil {
+			log.Fatalf("Failed to connect to Remote Primary: %v", err)
+		}
+		conn = remoteConn
 	}
 	defer conn.Close()
 
@@ -1040,6 +1224,101 @@ func runGenerate(ctx context.Context, args []string) {
 	fmt.Printf("Successfully generated migration: %s\n", fileName)
 }
 
+// initTursoSync initializes the embedded replica for data pushing/pulling
+func initTursoSync(schemaPath, overrideURL, overrideRemote, overrideToken string) (*turso.TursoSyncDb, error) {
+	var localUrl, remoteUrl, authToken string
+
+	// Parse from file if it exists
+	file, err := os.Open(schemaPath)
+	if err == nil {
+		defer file.Close()
+		envRegex := regexp.MustCompile(`env\("([^"]+)"\)`)
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "url =") {
+				localUrl = extractConfigValue(line, envRegex)
+			} else if strings.HasPrefix(line, "remote_url =") {
+				remoteUrl = extractConfigValue(line, envRegex)
+			} else if strings.HasPrefix(line, "auth_token =") {
+				authToken = extractConfigValue(line, envRegex)
+			}
+		}
+	}
+
+	// Apply Headless Overrides
+	if overrideURL != "" {
+		localUrl = overrideURL
+	}
+	if overrideRemote != "" {
+		remoteUrl = overrideRemote
+	}
+	if overrideToken != "" {
+		authToken = overrideToken
+	}
+
+	if localUrl == "" || remoteUrl == "" || authToken == "" {
+		return nil, fmt.Errorf("tursosync requires 'url', 'remote_url', and 'auth_token' defined in db.schema or passed via flags")
+	}
+
+	localPath := strings.TrimPrefix(localUrl, "file:")
+	return turso.NewTursoSyncDb(context.Background(), turso.TursoSyncDbConfig{
+		Path:      localPath,
+		RemoteUrl: remoteUrl,
+		AuthToken: authToken,
+	})
+}
+
+// getTursoRemoteConn provides a direct connection to the remote primary server for DDL/Schema changes
+func getTursoRemoteConn(schemaPath, overrideRemote, overrideToken string) (*sql.DB, error) {
+	var remoteUrl, authToken string
+
+	file, err := os.Open(schemaPath)
+	if err == nil {
+		defer file.Close()
+		envRegex := regexp.MustCompile(`env\("([^"]+)"\)`)
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "remote_url =") {
+				remoteUrl = extractConfigValue(line, envRegex)
+			} else if strings.HasPrefix(line, "auth_token =") {
+				authToken = extractConfigValue(line, envRegex)
+			}
+		}
+	}
+
+	// Apply Headless Overrides
+	if overrideRemote != "" {
+		remoteUrl = overrideRemote
+	}
+	if overrideToken != "" {
+		authToken = overrideToken
+	}
+
+	if remoteUrl == "" || authToken == "" {
+		return nil, fmt.Errorf("remote_url and auth_token are required in db.schema or passed via flags for tursosync migrations")
+	}
+
+	remoteUrl = strings.Replace(remoteUrl, "https://", "libsql://", 1)
+	connStr := fmt.Sprintf("%s?authToken=%s", remoteUrl, authToken)
+
+	return sql.Open("libsql", connStr)
+}
+
+func extractConfigValue(line string, envRegex *regexp.Regexp) string {
+	parts := strings.SplitN(line, "=", 2)
+	if len(parts) == 2 {
+		val := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		matches := envRegex.FindStringSubmatch(val)
+		if len(matches) == 2 {
+			return os.Getenv(matches[1])
+		}
+		return val
+	}
+	return ""
+}
+
 func CheckTableExists(ctx context.Context, conn *sql.DB, dbtype string, rdir string) {
 	dialect := GetDialect(dbtype)
 	if dialect.Type == "" {
@@ -1122,7 +1401,7 @@ func Conn2DB(schemaFilePath, overrideDB, overrideURL string) (*sql.DB, string, e
 			driverName = "pgx"
 		case "mysql", "mariadb":
 			driverName = "mysql"
-		case "libsql":
+		case "libsql", "tursosync":
 			driverName = "libsql"
 		case "turso":
 			driverName = "turso"
@@ -1217,7 +1496,7 @@ func Conn2DB(schemaFilePath, overrideDB, overrideURL string) (*sql.DB, string, e
 		driverName = "pgx"
 	case "mysql", "mariadb":
 		driverName = "mysql"
-	case "libsql":
+	case "libsql", "tursosync":
 		driverName = "libsql"
 	case "turso":
 		driverName = "turso"
@@ -1305,7 +1584,11 @@ func generateSchemaString(db *Database) string {
 	for i := len(db.Tables) - 1; i >= 0; i-- {
 		t := db.Tables[i]
 
-		if t.Name == "_schema_migrations" {
+		if t.Name == "_schema_migrations" ||
+			strings.HasPrefix(t.Name, "sqlite_") ||
+			strings.HasPrefix(t.Name, "turso_cdc") ||
+			strings.HasPrefix(t.Name, "turso_sync") ||
+			strings.HasPrefix(t.Name, "libsql_") {
 			continue
 		}
 
